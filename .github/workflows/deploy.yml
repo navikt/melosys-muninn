@@ -1,0 +1,146 @@
+name: deploy
+
+# Builds an image from PUBLIC muninn at a pinned tag, overlaid with this repo's
+# bot folder, and deploys it to dev-gcp. Nothing in the public repo is edited:
+# the only thing this workflow adds to the checkout is `Dockerfile.dockerignore`,
+# which BuildKit prefers over `.dockerignore` and which lets `bots/` through.
+#
+# The tag is an INPUT with no default that floats. A deploy should name the
+# muninn commit it shipped, and `main` is not a name — a rollback needs to be
+# "redeploy tag X", not "hope main has not moved".
+
+on:
+  workflow_dispatch:
+    inputs:
+      muninn_ref:
+        description: "Tag or commit SHA in navikt-external/muninn to build (not a branch)"
+        required: true
+      cluster:
+        description: "nais cluster"
+        required: true
+        default: dev-gcp
+        type: choice
+        options: [dev-gcp]
+
+env:
+  MUNINN_REPO: REPLACE_ME_public_muninn_repo   # e.g. owner/muninn
+  IMAGE_NAME: muninn
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out this repo (manifest + bot folder)
+        uses: actions/checkout@v4
+        with:
+          path: deploy
+
+      # A branch name would make the image unreproducible and the rollback
+      # story a guess. Refuse one here rather than discovering it at 02:00.
+      - name: The ref must not be a branch
+        run: |
+          REF="${{ inputs.muninn_ref }}"
+          if [ "$REF" = "main" ] || [ "$REF" = "master" ]; then
+            echo "::error::refusing to build a branch — pass a tag or a commit SHA"; exit 1
+          fi
+
+      - name: Check out public muninn at the pinned ref
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MUNINN_REPO }}
+          ref: ${{ inputs.muninn_ref }}
+          path: muninn
+
+      # Every value the team has to supply lives in vars-dev.json, and a
+      # half-filled file is the failure mode that deploys something wrong and
+      # quietly. Fail on the placeholder, before anything is built.
+      - name: No placeholder survives
+        run: |
+          if grep -n "REPLACE_ME" deploy/nais/vars-dev.json; then
+            echo "::error::vars-dev.json still has placeholders — see docs/PREREQUISITES.md"; exit 1
+          fi
+          if grep -rn "REPLACE_ME" deploy/bots/; then
+            echo "::error::a placeholder survives in the bot folder"; exit 1
+          fi
+          case "$MUNINN_REPO" in
+            REPLACE_ME*) echo "::error::MUNINN_REPO is still a placeholder"; exit 1 ;;
+          esac
+
+      # The overlay, and the one file that makes it land. `COPY bot[s] ./bots/`
+      # in muninn's Dockerfile tolerates an absent folder, which means a build
+      # that copies NOTHING succeeds — so the assertion below is not optional.
+      - name: Overlay the bot folder and the build-context ignore
+        run: |
+          # `rm -rf` FIRST, and it is not tidiness. Public muninn TRACKS
+          # `bots/jarvis/`, and this deployment's whole trick is dropping the
+          # `bots/` line from the build-context ignore — so without this line
+          # jarvis rides along into the image. Measured: the build reported
+          # "bots/ baked into the image: CLAUDE.md jarvis melosys". A pod that
+          # discovers jarvis offers it in the chat picker, with a wikiDir that
+          # does not exist, MCP servers that need `uv` and `npx`, and a Haiku
+          # backend with no credential — a second, broken bot in front of a
+          # colleague. This repo's `bots/` is the whole set, not an addition.
+          rm -rf muninn/bots
+          mkdir -p muninn/bots
+          cp -R deploy/bots/. muninn/bots/
+          cp deploy/build/Dockerfile.dockerignore muninn/Dockerfile.dockerignore
+          ls -la muninn/bots
+
+      - name: Build
+        working-directory: muninn
+        run: |
+          docker build \
+            --build-arg WITH_MEDIA=false \
+            --build-arg WITH_CLI=false \
+            --build-arg WITH_EMBEDDINGS=true \
+            -t "${IMAGE_NAME}:${{ github.sha }}" .
+
+      # Acceptance 24's positive half. It asserts the EXACT SET, not "contains":
+      # too few is a CrashLoopBackOff, and too many is a broken bot offered to a
+      # colleague in the picker — both have happened here.
+      - name: The image contains exactly this repo's bots
+        run: |
+          GOT=$(docker run --rm --entrypoint sh "${IMAGE_NAME}:${{ github.sha }}" -c 'ls -1 /app/bots' | sort)
+          WANT=$(ls -1 deploy/bots | sort)
+          echo "want: $WANT"
+          echo "got:  $GOT"
+          [ -n "$GOT" ] || { echo "::error::/app/bots is empty — the overlay did not land"; exit 1; }
+          [ "$GOT" = "$WANT" ] || { echo "::error::/app/bots is not this repo's bot set"; exit 1; }
+          for bot in $WANT; do
+            docker run --rm --entrypoint sh "${IMAGE_NAME}:${{ github.sha }}" \
+              -c "test -s /app/bots/$bot/CLAUDE.md" \
+              || { echo "::error::$bot has no CLAUDE.md in the image — discoverAllBots would exit 1"; exit 1; }
+          done
+
+      - name: The image carries no CLI and no ffmpeg
+        run: |
+          if docker run --rm --entrypoint sh "${IMAGE_NAME}:${{ github.sha }}" -c 'command -v claude'; then
+            echo "::error::the Claude CLI is in the image"; exit 1
+          fi
+          if docker run --rm --entrypoint sh "${IMAGE_NAME}:${{ github.sha }}" -c 'command -v ffmpeg'; then
+            echo "::error::ffmpeg is in the image"; exit 1
+          fi
+
+      # The bake is silent when it fails at runtime (warmupEmbeddings catches),
+      # so the image is where it gets checked.
+      - name: The embedding model is baked
+        run: |
+          docker run --rm --entrypoint sh "${IMAGE_NAME}:${{ github.sha }}" \
+            -c 'test -s node_modules/@huggingface/transformers/.cache/Xenova/all-MiniLM-L6-v2/onnx/model_quantized.onnx' \
+            || { echo "::error::WITH_EMBEDDINGS=true produced no model weights"; exit 1; }
+
+      - name: Push to GAR
+        run: |
+          echo "::error::REPLACE_ME — wire up the team's GAR push (nais/login + docker push)"
+          exit 1
+
+      - name: Deploy to nais
+        uses: nais/deploy/actions/deploy@v2
+        env:
+          CLUSTER: ${{ inputs.cluster }}
+          RESOURCE: deploy/nais/app.yaml
+          VARS: deploy/nais/vars-dev.json
+          VAR: image=REPLACE_ME_gar_path:${{ github.sha }}

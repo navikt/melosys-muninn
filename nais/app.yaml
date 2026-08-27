@@ -1,0 +1,164 @@
+apiVersion: nais.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ app_name }}
+  namespace: {{ namespace }}
+  labels:
+    team: {{ team }}
+  annotations:
+    # Without this the sidecar never injects NAIS_TOKEN_INTROSPECTION_ENDPOINT,
+    # and muninn's MUNINN_AUTH=entra boot assert refuses to start. It is not an
+    # optimisation — it is the difference between a pod and a CrashLoopBackOff.
+    texas.nais.io/enabled: "true"
+spec:
+  image: {{ image }}
+
+  # The IMAGE pins DASHBOARD_PORT=3000 and DASHBOARD_HOST=0.0.0.0 (muninn's own
+  # defaults are 3010 and 127.0.0.1, which would be unreachable here). This
+  # number must match that ENV or every probe is refused.
+  port: 3000
+
+  # ONE replica, and a Recreate rollout — a correctness constraint, not capacity.
+  # chatState, the socket registry, the LRU, agentStatus, the pending-message
+  # one-shot store and the Texas introspection cache are all process-local, so a
+  # second replica answers half the requests from an empty memory. nais defaults
+  # replicas.min to 2, and the default RollingUpdate would run two pods during
+  # every deploy even with the pin — hence Recreate, which costs one dropped
+  # socket and one in-flight turn per rollout. The client reconnects in ~2 s; the
+  # turn does not come back.
+  replicas:
+    min: 1
+    max: 1
+  strategy:
+    type: Recreate
+
+  # Both paths are muninn's OPEN zone (src/auth/zones.ts) — they answer with no
+  # credential, which they must, because kubelet probes the app port directly
+  # and carries none. They are deliberately NOT the same endpoint:
+  # /api/live touches nothing, /api/ready reads the database. Pointing liveness
+  # at a DB-reading path turns a Cloud SQL blip into a restart loop, and on a
+  # single-replica Recreate deployment that is an outage.
+  liveness:
+    path: /api/live
+    initialDelay: 20
+    timeout: 5
+  readiness:
+    path: /api/ready
+    initialDelay: 20
+    timeout: 5
+  startup:
+    path: /api/live
+    initialDelay: 20
+    # The entrypoint's connect budget alone is 30 s and the migrations run after
+    # it, so the startup probe has to tolerate a cold first boot.
+    failureThreshold: 30
+    periodSeconds: 5
+    timeout: 5
+
+  azure:
+    application:
+      enabled: true
+      tenant: {{ tenant }}
+      # muninn has NO in-app login allowlist. This is the gate: the group below
+      # is who may reach the app at all. `MUNINN_ADMIN_IDENTS` is a second axis
+      # ON TOP of it (who is an operator), never a substitute for it.
+      allowAllUsers: false
+      claims:
+        extra:
+          # Entra emits NAVident only for an app that asks. Without it muninn
+          # mints user ids from `oid` instead — login still works and admin
+          # still resolves (resolveRole matches oid too), but every id and
+          # display name becomes unreadable. Cheap to ask for; expensive to
+          # backfill.
+          - NAVident
+        groups:
+          - id: {{ group_muninn_bruker }}
+    sidecar:
+      enabled: true
+      autoLogin: true
+      autoLoginIgnorePaths:
+        # Probes and the favicon only. Everything else — including /chat and the
+        # WebSocket upgrade — must go through login, and the upgrade is the one
+        # path proven by hand before this manifest was trusted (see
+        # docs/step-zero-websocket.md).
+        - /api/live
+        - /api/ready
+        - /favicon.svg
+        - /favicon.ico
+
+  gcp:
+    sqlInstances:
+      - name: {{ db_instance }}
+        type: POSTGRES_17
+        tier: {{ db_tier }}
+        diskAutoresize: true
+        cascadingDelete: false
+        databases:
+          - name: {{ db_name }}
+            # This is what makes the platform inject DB_URL (rather than
+            # NAIS_DATABASE_<APP>_<DB>_URL). muninn's entrypoint adopts DB_URL
+            # into DATABASE_URL, and both db/ CLIs read it directly so the
+            # `kubectl debug` remedies target the right database.
+            envVarPrefix: DB
+        flags:
+          - name: timezone
+            value: "Europe/Oslo"
+    permissions:
+      # Vertex AI. The pod authenticates to it with its own workload-identity
+      # service account — there is no model API key anywhere in this manifest,
+      # and that is the point: the NAV-approved path is Vertex, and Vertex takes
+      # ADC. See docs/PREREQUISITES.md §7 for what is still open here.
+      - resource:
+          apiVersion: resourcemanager.cnrm.cloud.google.com/v1beta1
+          kind: Project
+          name: {{ gcp_project }}
+        role: roles/aiplatform.user
+
+  accessPolicy:
+    outbound:
+      external:
+        # nais egress is default-deny. Anything not listed here does not exist
+        # as far as the pod is concerned — which is also the safety net under
+        # the model-region decision: an unapproved endpoint fails closed.
+        - host: {{ vertex_host }}
+
+  resources:
+    limits:
+      memory: 1024Mi
+    requests:
+      cpu: 200m
+      memory: 512Mi
+
+  ingresses:
+    - {{ ingress }}
+
+  env:
+    # --- what this process is ------------------------------------------------
+    - name: MUNINN_PROFILE
+      value: "nais"
+    - name: MUNINN_AUTH
+      value: "entra"
+    - name: MUNINN_TENANT
+      value: {{ tenant }}
+    # Prefer OID entries. A NAVident is RE-ISSUED when someone leaves, and this
+    # list has no protection against that — the newcomer who inherits the ident
+    # would resolve to admin on their first login. (`user_identities` is keyed
+    # on oid and refuses to adopt the account, but this list is not.)
+    - name: MUNINN_ADMIN_IDENTS
+      value: {{ admin_oids }}
+    # The ingress origin, verbatim, with the scheme. This stops the pod TWICE if
+    # it is wrong: an authenticating mode refuses to BOOT on an empty value, and
+    # the origin check compares Origin against this list and never against the
+    # request's own Host — so a same-origin POST from the deployed page is
+    # refused, silently, on every write. The same list gates /chat/ws.
+    - name: MUNINN_ALLOWED_ORIGINS
+      value: {{ ingress }}
+
+    # --- the model -----------------------------------------------------------
+    # Vertex, via the workload-identity SA granted above. No key.
+    - name: CLAUDE_CODE_USE_VERTEX
+      value: "1"
+    - name: ANTHROPIC_VERTEX_PROJECT_ID
+      value: {{ gcp_project }}
+    - name: CLOUD_ML_REGION
+      value: {{ vertex_region }}

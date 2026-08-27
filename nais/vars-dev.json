@@ -1,0 +1,21 @@
+{
+  "_comment": "Every REPLACE_ME below is a value only the team can supply — see docs/PREREQUISITES.md. The deploy workflow refuses to run while any of them survives, so a half-filled file fails loudly instead of deploying something wrong.",
+
+  "app_name": "muninn",
+  "namespace": "REPLACE_ME_namespace",
+  "team": "REPLACE_ME_team",
+
+  "ingress": "REPLACE_ME_https_ingress_url",
+
+  "tenant": "REPLACE_ME_entra_tenant",
+  "group_muninn_bruker": "REPLACE_ME_group_object_id",
+  "admin_oids": "REPLACE_ME_comma_separated_oids",
+
+  "gcp_project": "REPLACE_ME_gcp_project_id",
+  "vertex_region": "REPLACE_ME_vertex_region",
+  "vertex_host": "REPLACE_ME_vertex_host",
+
+  "db_instance": "muninn-db",
+  "db_name": "muninn",
+  "db_tier": "db-custom-1-3840"
+}

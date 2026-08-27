@@ -1,0 +1,9 @@
+{
+  "connector": "claude-sdk",
+  "haikuBackend": "anthropic",
+  "model": "REPLACE_ME_vertex_model_id",
+  "thinkingMaxTokens": 8000,
+  "timeoutMs": 300000,
+  "contextWindow": 200000,
+  "componentAnswers": true
+}

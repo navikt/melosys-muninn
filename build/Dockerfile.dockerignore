@@ -1,0 +1,28 @@
+# The build-context ignore file for the nais image.
+#
+# It is a copy of public muninn's `.dockerignore` MINUS the `bots/` line, and it
+# exists because those two requirements cannot live in one file. The public repo
+# must exclude `bots/`: the folders are gitignored, one of them carries NAV
+# configuration, and a developer building locally must not bake whichever bots
+# happen to be on their laptop into an image. This deployment must INCLUDE
+# exactly one bot folder, or `discoverAllBots()` finds nothing and the process
+# exits 1 — a CrashLoopBackOff, not an empty chat.
+#
+# BuildKit resolves `<dockerfile-name>.dockerignore` in preference to
+# `.dockerignore`, so the deploy workflow copies this file next to the checked-out
+# public `Dockerfile` as `Dockerfile.dockerignore` and the public repo is never
+# edited. Measured on Docker 29.6.2, both directions:
+#
+#     .dockerignore excludes bots/          → [build] NO BOTS
+#     + Dockerfile.dockerignore (this file) → [build] bots present: <name>
+#                                             docker run … ls /app/bots → <name>
+#
+# Keep it in sync with the public `.dockerignore` when that file changes. The
+# only intended difference is the missing `bots/` line.
+node_modules/
+.git/
+.env
+*.test.ts
+coverage/
+models/
+.DS_Store
