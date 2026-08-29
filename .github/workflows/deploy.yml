@@ -281,7 +281,12 @@ jobs:
           # name containing a space, so the refusal names a truncated path) and
           # not `find … | while` (a pipeline puts the loop in a subshell, where
           # `found` would not propagate and `exit 1` would not fail the step).
-          find deploy/bots -mindepth 1 -maxdepth 1 | sort > /tmp/bot-entries
+          # "${RUNNER_TEMP:-/tmp}", not a fixed /tmp path: on a self-hosted or
+          # container runner with a shared /tmp, two concurrent dispatches
+          # truncate the same file while this loop already holds it open — a
+          # short read, i.e. fewer bots inspected, with the step still green.
+          ENTRIES="${RUNNER_TEMP:-/tmp}/bot-entries.$$"
+          find deploy/bots -mindepth 1 -maxdepth 1 | sort > "$ENTRIES"
           found=0
           while IFS= read -r e; do
             name=$(basename "$e")
@@ -308,7 +313,7 @@ jobs:
             jq -e -s 'length == 1 and (.[0].connector | . == "copilot-sdk" or . == "openai-compat" or . == "claude-sdk")' "$e/config.json" > /dev/null || {
               echo "::error::${e}/config.json must be ONE json object pinning connector to copilot-sdk, openai-compat or claude-sdk. Unset, mistyped (discovery drops an unknown enum), claude-cli, or unparseable all end up on claude-cli, which this image does not carry. NB this allowlist is CONNECTOR_VALUES minus claude-cli — a connector added to muninn must be added here too."; exit 1
             }
-          done < /tmp/bot-entries
+          done < "$ENTRIES"
           if [ "$found" -eq 0 ]; then
             echo "::error::deploy/bots contains no bot folder"; exit 1
           fi
@@ -402,9 +407,22 @@ jobs:
         env:
           IMG: ${{ steps.docker-assert.outputs.image }}
         run: |
-          # `ls -1A`, both sides: `ls -1` hides a dot-directory that `cp -R`
-          # copies and muninn discovers, so GOT == WANT would hold with a ghost
-          # bot in the image.
+          # `ls -1A`, both sides, and it is worth being exact about what that
+          # buys, because the two ghost cases are caught by DIFFERENT things.
+          # Measured:
+          #   ghost in the IMAGE only  -> GOT != WANT, this comparison refuses
+          #                               (under `ls -1` it was invisible here)
+          #   ghost on BOTH sides      -> GOT == WANT, this comparison PASSES;
+          #                               what refuses it is the per-bot loop
+          #                               below, which now sees it in $WANT.
+          # So `-1A` closes the one-sided case AND feeds the dot-entry to the
+          # per-bot assertions. The set comparison alone cannot catch a ghost
+          # that is present on both sides.
+          # pipefail so a docker/daemon failure is reported AS ONE. Both piped
+          # assertions below already fail closed without it (empty stdin makes
+          # `jq -s` yield [] and `length == 1` false), but the operator was then
+          # told the bot had no pinned connector when the real fault was docker.
+          set -o pipefail
           GOT=$(docker run --rm --entrypoint sh "$IMG" -c 'ls -1A /app/bots' | sort)
           WANT=$(ls -1A deploy/bots | sort)
           echo "want: $WANT"

@@ -6,10 +6,10 @@ times the code they documented, and three separate rounds of editing them
 introduced false statements into a file that is about to be public.
 
 **It documents the guards that got something wrong, not every refusal in the
-workflow** (there are two dozen `exit 1`s across nine steps; the image
-assertions and the `vertex_region=global` refusal have no history worth a
-section). Deliberately no count here: two earlier drafts of this line stated one
-and both were wrong.
+workflow** — there are more than two dozen `exit 1`s, and the `vertex_region=global`
+refusal has no history worth a section. Deliberately no exact count: three
+earlier drafts of this line stated one and all three were wrong, which is itself
+the best argument for not stating one.
 
 **Almost none of this was found by reading.** Every mechanism below was measured
 by extracting the step's `run:` body and executing it — except §2b and §4b,
@@ -113,7 +113,8 @@ is exactly ONE json object pinning `connector` to `copilot-sdk`,
 | `[ -s "$d/CLAUDE.md" ]` | `[ -s ]` is **true for a directory** — the same gap that `-f` had just been introduced to close, one line below. A `CLAUDE.md` that is a directory passed here AND the image assertion (also `test -s`), then threw an uncaught `EISDIR` from `readFileSync` at pod boot: CrashLoopBackOff with all fifteen steps green. |
 | `jq -e '.connector == …'` on `config.json` | **No `-s`.** Exactly the hole §3 row 4 documents for the vars file, written one step later in the same commit that documented it: jq judges only the LAST document, so a concatenated `{"connector":"claude-cli"}{"connector":"openai-compat"}` passed — while muninn's own `JSON.parse` **throws** on it, the throw is caught, `botSettings` stays `{}`, and `resolveConnector` returns `claude-cli`. Measured both halves. |
 | `for d in deploy/bots/*/` | A glob does **not match a dotfile**. A `.ghost/` directory was inspected by nothing here, hidden from the image assertion's `ls -1` on both sides, copied by `cp -R`, and then DISCOVERED by muninn's `readdirSync` (which filters on `isDirectory()` only) — a second, connector-less bot in the chat picker with every step green. `find -mindepth 1 -maxdepth 1` sees it, and both `ls -1` became `ls -1A`. |
-| `for e in $(find …)` | Word-splits a name containing a space, so the refusal named a truncated path. `find … > file` then `while IFS= read -r` — not `find … \| while`, whose subshell would swallow both the counter and the `exit 1`. |
+| `for e in $(find …)` | Word-splits a name containing a space, so the refusal named a truncated path. `find … > file` then `while IFS= read -r` — not `find … \| while`, whose subshell would swallow both the counter and the `exit 1`. The file goes in `$RUNNER_TEMP`, not a fixed `/tmp` path, which two concurrent dispatches on a shared-`/tmp` runner would truncate under each other. |
+| `ls -1` on both sides of the image's exact-set assertion | Hid a dot-directory from the comparison **and** from the `for bot in $WANT` loop, so a ghost present only in the image passed. `ls -1A` closes that. Measured, and worth stating precisely: a ghost on BOTH sides still satisfies `GOT == WANT` — what refuses it is the per-bot loop, which now sees the dot-entry. |
 
 **Why the CONNECTOR, not just the file.** `discoverAllBots` needs only a
 `CLAUDE.md`, and `config.json` is an optional per-bot override — that is muninn
@@ -128,9 +129,11 @@ turn, in front of a colleague, with the whole pipeline green.
 The guard therefore checks the VALUE against the allowlist `copilot-sdk` /
 `openai-compat` / `claude-sdk` — which is `CONNECTOR_VALUES` minus `claude-cli`
 — and that single test covers unset, mistyped, explicitly-`claude-cli` and
-unparseable alike. It is asserted **twice**: on `deploy/bots/` before the build,
-and on the pushed IMAGE, because the artifact that gets deployed is the one that
-has to be right.
+unparseable alike. It is asserted **twice**: on `deploy/bots/` before the build, and on the built
+IMAGE before it is pushed, because nothing else binds the source tree to the
+artifact. ⚠️ **Not on the pushed artifact** — that is a different image (the
+assertion call is `push_image: "false"`), and the workflow is explicit that
+nothing ties the two together; see the `pull` comment on the push call.
 
 ⚠️ **The allowlist is hardcoded and has a maintenance obligation.** The day
 muninn gains a fifth connector, a correctly-pinned bot using it is refused here.
