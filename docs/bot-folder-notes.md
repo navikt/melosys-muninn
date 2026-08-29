@@ -3,7 +3,7 @@
 _Prose lives here rather than in `bots/melosys/` because an unknown key in
 `config.json` warns at discovery and a stray file ships in the image._
 
-Four things in here are not preferences. Each is the difference between a
+Five things in here are not preferences. Each is the difference between a
 working pod and a broken one, and none of them is visible from the file it
 lives in.
 
@@ -31,23 +31,35 @@ connector**. So an unpinned bot spawns a missing binary on every turn, and this
 one line is the only thing standing between the pod and that. muninn's own boot
 log says so.
 
-## 3. `haikuBackend` must be pinned too — and its value is a fail-closed choice
+## 3. `haikuBackend` must be pinned too — and `vertex` is the same endpoint as the turn
 
 The default for a non-`copilot-sdk` bot is `cli`, which does not exist here.
-`anthropic` is set instead, and **its host is deliberately absent from the
-manifest's `accessPolicy.outbound.external`**. That is not an oversight:
+`vertex` is set instead, and it reaches **the same approved Vertex endpoint the
+chat turn does** — which was the whole compliance point of muninn #484. It needs
+no addition to `accessPolicy.outbound.external`, and it defaults to
+`google/gemini-2.5-flash-lite` (override with `HAIKU_VERTEX_MODEL`), measured
+reachable in `europe-north1`.
 
-- On this pod Haiku is almost certainly never called. The three extractors are
-  force-disabled for an `entra` identity, the `research_knowledge` decomposer
-  needs an MCP tool that does not exist here (§4), and the scheduler never
-  starts (§1).
-- If something ever does call it, `api.anthropic.com` is not a NAV-approved
-  model endpoint. nais egress is default-deny, so the call fails at the network
-  rather than reaching an unapproved provider. A visible failure is the correct
-  outcome; a working call would be the bug.
+An earlier version of this file pinned `anthropic` and argued the opposite way:
+Haiku is almost never called on this pod (the three extractors are force-disabled
+for an `entra` identity, the `research_knowledge` decomposer needs an MCP tool
+that does not exist here — §4 — and the scheduler never starts, §1), so leaving
+`api.anthropic.com` off the default-deny egress list would make an unexpected
+call fail at the network rather than reach an unapproved provider.
 
-When the Vertex work lands a fourth Haiku backend (see the `muninn-nav-vertex-models`
-plan, PR 3), change this value and add nothing to the egress list.
+That argument was sound and is now the weaker one, because **it rests on a
+negative that a later config change breaks quietly**: the day huginn lands on
+nais and `.mcp.json` gains the `research` entry, the decomposer starts calling
+Haiku on every lookup and the `anthropic` pin becomes a hard failure in front of
+a colleague. Correct-by-construction beats fails-closed-by-absence here.
+
+Unlike the chat connector, this backend derives nothing from `baseUrl`:
+`resolveVertexHaikuTarget` reads `ANTHROPIC_VERTEX_PROJECT_ID` **or**
+`VERTEX_PROJECT_ID`, and `CLOUD_ML_REGION` **or** `VERTEX_REGION`. That is why
+`nais/app.yaml` still carries two Vertex env variables after
+`CLAUDE_CODE_USE_VERTEX` was deleted — they exist for this one consumer, under
+muninn's own names, with the SDK's names left unset so the `claude-sdk` path
+stays off.
 
 ## 4. `.mcp.json` has no servers, and that is the design
 
@@ -80,7 +92,32 @@ When huginn lands on nais, this file becomes one entry:
 …plus a `knowledgeApiUrl` pointing at a huginn the pod can actually reach, and
 an `accessPolicy.outbound.rules` entry for it.
 
-## 5. `model` is REPLACE_ME on purpose
+## 5. `model` is pinned; `baseUrl` is the one the workflow writes
 
-It depends on an unanswered question — which region, and therefore which model,
-Team KI accepts. See `docs/PREREQUISITES.md` §7.
+`model` is `google/gemini-2.5-flash` — **with the `google/` publisher prefix**,
+without which Vertex answers `400`. It is no longer an open question: measured
+2026-08-28, `europe-north1` carries zero Claude models, so the `claude-sdk` +
+`CLAUDE_CODE_USE_VERTEX` path this folder used to describe is dropped. See
+`docs/PREREQUISITES.md` §7.
+
+`baseUrl` is the value that is still `REPLACE_ME_vertex_baseurl`, and it stays
+that way in git **on purpose**. The deploy workflow builds it from `gcp_project`
+and `vertex_region` and `jq`-assigns it into the copy of this folder it overlays
+into the build context, so the project and the region are stated once in
+`nais/vars-q2.json` and derived everywhere else.
+
+Two consequences:
+
+- **Do not fill it in by hand.** A hand-written copy is a second place the
+  project and the region live, and nothing compares them. A project mismatch
+  means `roles/aiplatform.user` is granted on one project while every turn calls
+  another: Google answers `403`, and the connector's refresh matches `401` only,
+  so there is no retry and no diagnostic.
+- **The KEY must stay present.** A `jq` assign would happily create a missing
+  key, and then the workflow's `REPLACE_ME` backstop has nothing to catch — a
+  removed or non-matching assign would ship a bot with no `baseUrl` and no guard
+  firing.
+
+Nor is the URL a literal with angle brackets. `REPLACE_ME_vertex_baseurl` is
+what the grep can see; a `https://<region>-…` placeholder is invisible to it and
+would ship `<region>` into every request URL.

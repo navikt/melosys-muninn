@@ -122,52 +122,77 @@ prints them.
 Sequencing note: the instance does not exist until the manifest is applied, so
 either deploy once expecting a crash-loop, or scale to zero replicas first.
 
-## 7. The model — OPEN, and the one item that can stall this
+## 7. The model — decided, with one procurement question left
 
-Owner: **REPLACE_ME** · Decision: **Team KI**
+Owner: **REPLACE_ME** · Decision: **Team KI** (the region and model half is answered)
 
-This is no longer "a personal Copilot token in a nais secret with an owner and
-an expiry". Team KI's guidance points at **GCP Vertex AI**, which the pod
-authenticates to with its own workload-identity service account — so there is no
-model credential in this repo at all, and the ROS line changes shape: it is
-about a *region* and a *model*, not about whose token it is.
+There is no model credential in this repo at all. The pod authenticates to
+**GCP Vertex AI** with its own workload-identity service account, so the ROS
+line is about a *region* and a *model*, not about whose token it is.
 
-`nais/app.yaml` already carries the lever (`gcp.permissions` →
-`roles/aiplatform.user`) and the env (`CLAUDE_CODE_USE_VERTEX`,
-`ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`). What is missing is the answer
-to a measured conflict, documented in full in the mimir plan
-`muninn-nav-vertex-models`:
+**Measured 2026-08-28 and decided: Gemini 2.5 Flash in `europe-north1`, over the
+OpenAI-compatible Vertex endpoint.** The path that this file used to describe —
+`connector: "claude-sdk"` plus `CLAUDE_CODE_USE_VERTEX=1` — is **dropped**, and
+not for a code reason: `europe-north1` carries **zero** Claude models, and every
+Claude is reachable only through the `eu` multi-region endpoint at quota zero.
+The full measurement is in the mimir plan `muninn-nav-vertex-models`.
 
-> **Claude is not available in `europe-north1` at all.** Gemini 2.5 is. Claude
-> 4.6 exists in `europe-west1`; Claude 5 only on the `eu` multi-region endpoint.
-> The guidance recommends the nais region and forbids `global`, but does not say
-> whether `eu` multi-region counts as an EU/EØS region.
+So `bots/melosys/config.json` reads:
 
-So three questions, in the order that unblocks the most:
+```json
+"connector": "openai-compat",
+"model": "google/gemini-2.5-flash",
+"baseUrl": "https://<region>-aiplatform.googleapis.com/v1/projects/<project>/locations/<region>/endpoints/openapi"
+```
 
-1. Is `europe-west1` acceptable when `europe-north1` does not have the model?
-2. Does the `eu` multi-region endpoint count as an EU/EØS region?
-3. Which GCP project owns the quota, and is pay-as-you-go enough?
+Three things about that are load-bearing:
 
-**And one engineering caveat that is not in the manifest's power to fix:** the
-zero-code Vertex path (`connector: "claude-sdk"` + `CLAUDE_CODE_USE_VERTEX=1`) is
-blocked today by `assertHaveAuth()` in `src/ai/connectors/claude-sdk.ts`, which
-requires `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` and throws before the
-SDK — which needs neither on Vertex — is ever reached. That is a one-line change
-in public muninn (`muninn-nav-vertex-models` PR 5), and it must land before this
-bot answers anything.
+- **The `google/` publisher prefix is required.** Vertex answers `400` without it.
+- **The `baseUrl` is written by the deploy workflow**, from `gcp_project` and
+  `vertex_region`, into the copy of the bot folder it overlays. It is checked in
+  as `REPLACE_ME_vertex_baseurl` so that a removed or non-matching assign is
+  caught by the placeholder grep instead of shipping a bot with no `baseUrl`.
+  **Do not fill it in by hand** — see §8.
+- **`thinkingMaxTokens: 16000` is not a thinking budget on this connector.** On
+  `openai-compat` it is `max_tokens` for the whole response — Gemini's reasoning
+  tokens and the answer share it. And `openai-compat` never inspects
+  `finish_reason`: a response that exhausts the budget is returned as an
+  ordinary answer, with nothing in the trace saying why it stopped. That is why
+  acceptance asserts a *whole* answer rather than "a reply arrived".
+
+What is still open, and it is procurement rather than engineering:
+
+1. **Which GCP project owns the Vertex quota**, and is pay-as-you-go enough?
+2. **Does the pod's own workload-identity SA need `roles/aiplatform.user` on
+   its own nais project, or on a separate team project that owns the quota?**
+   nais documents `gcp.permissions` as being for resources *not* provisioned
+   through nais. Unverified — a question for nais/Team KI.
+
+Team KI's `eu`-multi-region question does **not** block this deploy. It only
+ever gated Claude, and Claude is dropped. It stays open for a future model
+change — which is why nothing here hardcodes one of the two Vertex host shapes.
 
 ## 8. Egress, and the texas annotation
 
 Value: `vertex_host`, `gcp_project`.
 Owner: **REPLACE_ME**
 
-nais egress is default-deny, so every external host is enumerated. Three notes:
+nais egress is default-deny, so every external host is enumerated. Four notes:
 
 - The model host is the only entry in `accessPolicy.outbound.external` today.
   Whether Vertex traffic needs one at all, or routes over Google-private paths,
   is **unverified** — a question for nais/Team KI rather than something to
-  assume.
+  assume. Listing it costs nothing and fails closed, so it is listed.
+- **The credential hop is not in that list, deliberately.** Application Default
+  Credentials are fetched from `http://metadata.google.internal/computeMetadata/v1/…`
+  on a 700 ms budget. The assumption is that GKE metadata is node-local and
+  therefore outside `accessPolicy` altogether. Write it down rather than
+  rediscover it: the fallback when that fetch fails is the **`gcloud` CLI**,
+  which this image does not carry under any build arg (`WITH_CLI` gates the
+  *Claude* CLI installer; the Google Cloud SDK is never installed), so the
+  failure surfaces as an error message telling an operator to run
+  `gcloud auth application-default login` — nonsense inside a pod, and pointing
+  away from the real cause.
 - `texas.nais.io/enabled: "true"` is already set. Without it
   `NAIS_TOKEN_INTROSPECTION_ENDPOINT` is never injected and muninn's boot assert
   fires — a refusal, not a crash, but the pod does not start.

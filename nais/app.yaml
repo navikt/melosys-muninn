@@ -155,10 +155,29 @@ spec:
       value: {{ ingress }}
 
     # --- the model -----------------------------------------------------------
-    # Vertex, via the workload-identity SA granted above. No key.
-    - name: CLAUDE_CODE_USE_VERTEX
-      value: "1"
-    - name: ANTHROPIC_VERTEX_PROJECT_ID
+    # Vertex, via the workload-identity SA granted above. No key anywhere.
+    #
+    # The CHAT turn takes NONE of its Vertex configuration from here. The bot is
+    # `connector: "openai-compat"` with a Vertex `baseUrl`, and muninn derives
+    # everything from that URL: `isVertexEndpoint` switches the credential to
+    # Application Default Credentials, `VertexTokenProvider` fetches from the
+    # metadata server, and the connector retries once on a 401 with a fresh
+    # token. There is deliberately no `CLAUDE_CODE_USE_VERTEX` here — that is
+    # the Agent SDK's switch, it belongs to the `claude-sdk` connector this bot
+    # does not use, and setting it would additionally require
+    # ANTHROPIC_VERTEX_PROJECT_ID or refuse the boot.
+    #
+    # The two below exist for ONE consumer: the Haiku router on
+    # `haikuBackend: "vertex"` (`resolveVertexHaikuTarget`, src/ai/haiku-vertex.ts).
+    # It reads env and derives nothing, so it needs the project and the region
+    # stated. Muninn's OWN names, not the SDK's: leaving the SDK's names unset
+    # is what keeps the `claude-sdk` path off.
+    #
+    # ⚠️ These two and the bot's `baseUrl` name the same project and the same
+    # region in two files that nothing compares. The workflow's `jq` step is
+    # what keeps them equal — it BUILDS the baseUrl from {{ gcp_project }} and
+    # {{ vertex_region }} rather than letting anyone maintain a second copy.
+    - name: VERTEX_PROJECT_ID
       value: {{ gcp_project }}
-    - name: CLOUD_ML_REGION
+    - name: VERTEX_REGION
       value: {{ vertex_region }}

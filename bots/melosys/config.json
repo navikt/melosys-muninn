@@ -1,9 +1,10 @@
 {
-  "connector": "claude-sdk",
-  "haikuBackend": "anthropic",
-  "model": "REPLACE_ME_vertex_model_id",
-  "thinkingMaxTokens": 8000,
+  "connector": "openai-compat",
+  "haikuBackend": "vertex",
+  "model": "google/gemini-2.5-flash",
+  "baseUrl": "REPLACE_ME_vertex_baseurl",
+  "thinkingMaxTokens": 16000,
   "timeoutMs": 300000,
-  "contextWindow": 200000,
+  "contextWindow": 1048576,
   "componentAnswers": true
 }
