@@ -271,37 +271,47 @@ jobs:
           # discovery WARNS AND DROPS an unknown enum value — so a mistyped
           # `"openai_compat"` still reads as pinned in the file while being
           # unset at runtime. Allowlist, therefore, not a != comparison.
+          # `find`, not a glob: `deploy/bots/*` does not match a DOTFILE, so a
+          # `.ghost/` directory was inspected by nothing here — and `ls -1`
+          # hides it from the image's exact-set assertion too, while `cp -R`
+          # copies it and muninn's own readdirSync (isDirectory only) DISCOVERS
+          # it. A second, connector-less bot in the chat picker, every step
+          # green. Measured.
+          # Read through a FILE, not `for e in $(find …)` (which word-splits a
+          # name containing a space, so the refusal names a truncated path) and
+          # not `find … | while` (a pipeline puts the loop in a subshell, where
+          # `found` would not propagate and `exit 1` would not fail the step).
+          find deploy/bots -mindepth 1 -maxdepth 1 | sort > /tmp/bot-entries
           found=0
-          for d in deploy/bots/*/; do
-            [ -d "$d" ] || continue
-            name=$(basename "$d")
-            found=$((found + 1))
+          while IFS= read -r e; do
+            name=$(basename "$e")
+            [ -d "$e" ] || { echo "::error::$e is not a bot folder — deploy/bots/ holds bot directories only"; exit 1; }
             case $(printf %s "$name" | jq -Rsr 'if test("\\A[a-z0-9][a-z0-9-]*\\z") then "ok" else "bad" end') in
               ok) ;;
-              *) echo "::error::bot folder name '$name' is not a plain slug — it is used unquoted downstream and as a container path"; exit 1 ;;
+              *) echo "::error::bot folder name '$name' is not a plain slug — it is used unquoted downstream, hidden from ls -1 if it starts with a dot, and used as a container path"; exit 1 ;;
             esac
+            found=$((found + 1))
             # -f AND -s: `[ -s ]` alone is TRUE FOR A DIRECTORY, and a CLAUDE.md
             # that is a directory passes every later check too, then throws an
             # uncaught EISDIR in readFileSync at pod boot.
-            { [ -f "$d/CLAUDE.md" ] && [ -s "$d/CLAUDE.md" ]; } || {
-              echo "::error::${d}CLAUDE.md is missing, empty or not a regular file — muninn discovers a bot by that file and exits 1 on zero bots"; exit 1
+            { [ -f "$e/CLAUDE.md" ] && [ -s "$e/CLAUDE.md" ]; } || {
+              echo "::error::${e}/CLAUDE.md is missing, empty or not a regular file — muninn discovers a bot by that file and exits 1 on zero bots"; exit 1
             }
-            [ -f "$d/config.json" ] || {
-              echo "::error::${d}config.json is missing or not a regular file"; exit 1
+            [ -f "$e/config.json" ] || {
+              echo "::error::${e}/config.json is missing or not a regular file"; exit 1
             }
-            jq -e '.connector == "copilot-sdk" or .connector == "openai-compat" or .connector == "claude-sdk"' "$d/config.json" > /dev/null || {
-              echo "::error::${d}config.json must pin connector to copilot-sdk, openai-compat or claude-sdk — unset, mistyped or claude-cli spawns a claude binary this image does not carry, on every turn"; exit 1
+            # `-s` + `length == 1`, the same reason as the vars guard: without
+            # it a CONCATENATED STREAM passes (jq judges only the LAST document)
+            # while muninn's own JSON.parse THROWS on it — and that throw is
+            # caught, leaving botSettings {} and `resolveConnector` returning
+            # claude-cli. Measured, both halves.
+            jq -e -s 'length == 1 and (.[0].connector | . == "copilot-sdk" or . == "openai-compat" or . == "claude-sdk")' "$e/config.json" > /dev/null || {
+              echo "::error::${e}/config.json must be ONE json object pinning connector to copilot-sdk, openai-compat or claude-sdk. Unset, mistyped (discovery drops an unknown enum), claude-cli, or unparseable all end up on claude-cli, which this image does not carry. NB this allowlist is CONNECTOR_VALUES minus claude-cli — a connector added to muninn must be added here too."; exit 1
             }
-          done
+          done < /tmp/bot-entries
           if [ "$found" -eq 0 ]; then
             echo "::error::deploy/bots contains no bot folder"; exit 1
           fi
-          # Everything under deploy/bots/ must BE a bot folder: a stray file
-          # rides `cp -R` into the image and fails the per-bot assertion later
-          # with a message about discovery, concerning a file discovery ignores.
-          for e in deploy/bots/*; do
-            [ -d "$e" ] || { echo "::error::$e is not a bot folder — deploy/bots/ holds bot directories only"; exit 1; }
-          done
 
           if grep -rn "REPLACE_ME" deploy/bots/; then
             echo "::error::a placeholder survives in the bot folder"; exit 1
@@ -392,16 +402,25 @@ jobs:
         env:
           IMG: ${{ steps.docker-assert.outputs.image }}
         run: |
-          GOT=$(docker run --rm --entrypoint sh "$IMG" -c 'ls -1 /app/bots' | sort)
-          WANT=$(ls -1 deploy/bots | sort)
+          # `ls -1A`, both sides: `ls -1` hides a dot-directory that `cp -R`
+          # copies and muninn discovers, so GOT == WANT would hold with a ghost
+          # bot in the image.
+          GOT=$(docker run --rm --entrypoint sh "$IMG" -c 'ls -1A /app/bots' | sort)
+          WANT=$(ls -1A deploy/bots | sort)
           echo "want: $WANT"
           echo "got:  $GOT"
           [ -n "$GOT" ] || { echo "::error::/app/bots is empty — the overlay did not land"; exit 1; }
           [ "$GOT" = "$WANT" ] || { echo "::error::/app/bots is not this repo's bot set"; exit 1; }
+          # Asserted on the IMAGE, not only on deploy/bots/ — the artifact that
+          # is pushed and deployed is the one that has to be right, and the
+          # connector is the property that decides whether a turn can run at all.
           for bot in $WANT; do
             docker run --rm --entrypoint sh "$IMG" \
               -c "test -f /app/bots/$bot/CLAUDE.md && test -s /app/bots/$bot/CLAUDE.md" \
-              || { echo "::error::$bot has no CLAUDE.md in the image — discoverAllBots would exit 1"; exit 1; }
+              || { echo "::error::$bot has no usable CLAUDE.md in the image — discoverAllBots would exit 1"; exit 1; }
+            docker run --rm --entrypoint sh "$IMG" -c "cat /app/bots/$bot/config.json" \
+              | jq -e -s 'length == 1 and (.[0].connector | . == "copilot-sdk" or . == "openai-compat" or . == "claude-sdk")' > /dev/null \
+              || { echo "::error::$bot in the IMAGE has no usable pinned connector — it would fall back to claude-cli, which this image does not carry"; exit 1; }
           done
 
       - name: The image carries no CLI and no ffmpeg

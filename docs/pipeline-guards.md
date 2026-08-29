@@ -1,14 +1,19 @@
 # The deploy workflow's guards, and every form of them that was wrong
 
-`.github/workflows/deploy.yml` carries seven refusals. Each one is short in the
-file and each one arrived there after at least one form that looked right and
-was not. This page is where that history lives, so the workflow can state the
-rule instead of the archaeology — the comments grew to several times the code
-they documented, and three separate rounds of editing them introduced false
-statements into a file that is about to be public.
+This page is where the deploy workflow's guard history lives, so the workflow
+can state the rule instead of the archaeology — the comments grew to several
+times the code they documented, and three separate rounds of editing them
+introduced false statements into a file that is about to be public.
 
-**None of this was found by reading.** Every entry below was measured by
-extracting the step's `run:` body and executing it.
+**It documents the guards that got something wrong, not every refusal in the
+workflow** (there are two dozen `exit 1`s across nine steps; the image
+assertions and the `vertex_region=global` refusal have no history worth a
+section). Deliberately no count here: two earlier drafts of this line stated one
+and both were wrong.
+
+**Almost none of this was found by reading.** Every mechanism below was measured
+by extracting the step's `run:` body and executing it — except §2b and §4b,
+which are an ordering claim and a repo-history claim, verified with `git show`.
 
 ---
 
@@ -94,8 +99,10 @@ an upstream rename break the build instead of silently dropping an exclusion.
 
 ## 5. "No placeholder survives in the bot folder"
 
-**Rule:** every `deploy/bots/<bot>/` has a non-empty `CLAUDE.md` and a
-`config.json`, and no `REPLACE_ME` survives anywhere under it.
+**Rule:** everything under `deploy/bots/` is a directory whose name is a plain
+slug; each holds a non-empty regular-file `CLAUDE.md` and a `config.json` that
+is exactly ONE json object pinning `connector` to `copilot-sdk`,
+`openai-compat` or `claude-sdk`; and no `REPLACE_ME` survives anywhere under it.
 
 | Form | Why it was wrong |
 |---|---|
@@ -104,6 +111,9 @@ an upstream rename break the build instead of silently dropping an exclusion.
 | `set -- deploy/bots/*/config.json; [ ! -e "$1" ]` | `[ -e ]` is true for a directory, so a directory *named* `config.json` satisfied it. And the message ("nothing to overlay") was wrong for a bot folder carrying only a `CLAUDE.md`. |
 | `[ -f "$d/config.json" ]` | **Asserted a proxy, not the property.** A `config.json` containing `{}` — or `{"connector":"claude-cli"}` — passed. So did a *mistyped* value: discovery **warns and drops** an unknown enum, so `"openai_compat"` reads as pinned in the file and is unset at runtime. Check the connector by VALUE against an allowlist. |
 | `[ -s "$d/CLAUDE.md" ]` | `[ -s ]` is **true for a directory** — the same gap that `-f` had just been introduced to close, one line below. A `CLAUDE.md` that is a directory passed here AND the image assertion (also `test -s`), then threw an uncaught `EISDIR` from `readFileSync` at pod boot: CrashLoopBackOff with all fifteen steps green. |
+| `jq -e '.connector == …'` on `config.json` | **No `-s`.** Exactly the hole §3 row 4 documents for the vars file, written one step later in the same commit that documented it: jq judges only the LAST document, so a concatenated `{"connector":"claude-cli"}{"connector":"openai-compat"}` passed — while muninn's own `JSON.parse` **throws** on it, the throw is caught, `botSettings` stays `{}`, and `resolveConnector` returns `claude-cli`. Measured both halves. |
+| `for d in deploy/bots/*/` | A glob does **not match a dotfile**. A `.ghost/` directory was inspected by nothing here, hidden from the image assertion's `ls -1` on both sides, copied by `cp -R`, and then DISCOVERED by muninn's `readdirSync` (which filters on `isDirectory()` only) — a second, connector-less bot in the chat picker with every step green. `find -mindepth 1 -maxdepth 1` sees it, and both `ls -1` became `ls -1A`. |
+| `for e in $(find …)` | Word-splits a name containing a space, so the refusal named a truncated path. `find … > file` then `while IFS= read -r` — not `find … \| while`, whose subshell would swallow both the counter and the `exit 1`. |
 
 **Why the CONNECTOR, not just the file.** `discoverAllBots` needs only a
 `CLAUDE.md`, and `config.json` is an optional per-bot override — that is muninn
@@ -117,8 +127,16 @@ turn, in front of a colleague, with the whole pipeline green.
 
 The guard therefore checks the VALUE against the allowlist `copilot-sdk` /
 `openai-compat` / `claude-sdk` — which is `CONNECTOR_VALUES` minus `claude-cli`
-— and that single test covers unset, mistyped and explicitly-`claude-cli` alike.
-See `bot-folder-notes.md` §2.
+— and that single test covers unset, mistyped, explicitly-`claude-cli` and
+unparseable alike. It is asserted **twice**: on `deploy/bots/` before the build,
+and on the pushed IMAGE, because the artifact that gets deployed is the one that
+has to be right.
+
+⚠️ **The allowlist is hardcoded and has a maintenance obligation.** The day
+muninn gains a fifth connector, a correctly-pinned bot using it is refused here.
+That is the right failure direction — fail-closed on an unknown connector beats
+shipping a pod that falls back to `claude-cli` — but the error message says so
+rather than insisting the value is mistyped. See `bot-folder-notes.md` §2.
 
 **And the folder names.** Every entry under `deploy/bots/` must BE a directory
 (a stray file rides `cp -R` into the image and then fails the per-bot assertion
