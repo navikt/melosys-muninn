@@ -11,7 +11,9 @@
 
   "tenant": "REPLACE_ME_entra_tenant",
   "group_muninn_bruker": "REPLACE_ME_group_object_id",
-  "admin_oids": "REPLACE_ME_comma_separated_oids",
+
+  "_comment_admins": "There is deliberately no `admin_oids` key: an oid is a stable personal identifier for a named human, and this repo is public. MUNINN_ADMIN_IDENTS comes from the nais secret named below, which somebody creates in the namespace out of band — see docs/PREREQUISITES.md §10. The secret's KEY must be literally MUNINN_ADMIN_IDENTS; envFrom injects keys verbatim.",
+  "admin_secret": "melosys-muninn-q2-admin-idents",
 
   "_comment_vertex": "There is deliberately no `vertex_host` key. The egress host is DERIVED by the deploy workflow from gcp_project + vertex_region and passed to nais/deploy as a VAR — leave it out and it stays that way. Adding it back means either a REPLACE_ME the first run hard-fails on, or a hand-filled value the computed VAR silently overrides.",
   "gcp_project": "REPLACE_ME_gcp_project_id",

@@ -3,12 +3,24 @@
 Everything below is either a NAV provisioning action or a decision that is not
 an engineering call. **Each one alone makes the pod useless**, which is why they
 are a checklist and not a list of nice-to-haves. Nothing here can be invented
-from the muninn side, and none of these values may ever land in the public
-muninn repo.
+from the muninn side.
 
-`nais/vars-q2.json` carries a `REPLACE_ME_` placeholder for each. The deploy
-workflow refuses to run while any of them survives — a half-filled file is the
-failure mode that deploys something almost-right and quietly.
+`nais/vars-q2.json` carries a `REPLACE_ME_` placeholder for most of them, and
+the deploy workflow refuses to run while any placeholder survives — a
+half-filled file is the failure mode that deploys something almost-right and
+quietly. Three items are **not** values in that file: §9 is a slug in the
+workflow, §10 is a secret created in the namespace, and §0 is a proof rather
+than a value.
+
+**This repo is public**, so two rules apply to what is written down here.
+*Values*: the infrastructure names — namespace, team, ingresses, tenant, project,
+region — are public by the hundred across `navikt`, and the one value that is
+about **people** (the admin `oid` list) has been moved out into a secret (§5,
+§10). *Owners*: recorded as **GitHub team handles**, never as personal names.
+Filling nine owner slots with colleagues' names would publish an internal
+responsibility map — who owns Entra consent, who owns the admin allowlist, who
+owns Cloud SQL — which is the same disclosure in prose that `admin_oids` was in
+JSON. Keep a personal name in an internal doc if the team wants one.
 
 ---
 
@@ -30,7 +42,7 @@ The ingress is the untested half. See `step-zero-websocket.md`.
 
 ## 1. An Entra app registration, with admin consent
 
-Owner: **REPLACE_ME**
+Owner: **@navikt/teammelosys**
 
 The nais manifest asks for it (`azure.application.enabled: true`), but consent is
 a directory action. Two claim requests ride along and both are already in
@@ -48,7 +60,7 @@ a directory action. Two claim requests ride along and both are already in
 ## 2. A group, and the decision that it is the gate
 
 Value: `group_muninn_bruker` — an object id (UUID).
-Owner: **REPLACE_ME**
+Owner: **@navikt/teammelosys**
 
 `allowAllUsers: false` plus one team group, exactly as melosys-console. This is
 load-bearing in a way worth stating: **muninn has no in-app login allowlist.**
@@ -59,7 +71,7 @@ second gate at the door.
 ## 3. The tenant
 
 Value: `tenant` — e.g. the directory melosys-console names in its own vars.
-Owner: **REPLACE_ME**
+Owner: **@navikt/teammelosys**
 
 Used twice, and they are different uses: the sidecar's
 `azure.application.tenant` (which really does select a directory) and muninn's
@@ -71,7 +83,7 @@ overruling it would be a second, weaker check in front of the real one.
 ## 4. The ingress hostnames — TWO of them
 
 Values: `ingress_intern` and `ingress_ansatt` — full `https://…` URLs.
-Owner: **REPLACE_ME**
+Owner: **@navikt/teammelosys**
 
 **Supply two hostnames, not one.** This is the shape `melosys-console` already
 serves, and its reason is not cosmetic: `intern.dev.nav.no` requires naisdevice,
@@ -98,10 +110,18 @@ reproduce the bug it looks like it prevents — a third ingress, or a hostname
 correction, updates two values and leaves the third stale, with the same silent
 symptom. Give the two hostnames; the origin list follows from them.
 
-## 5. Admin identities
+## 5. Admin identities — a namespace secret, not a variable
 
-Value: `admin_oids` — comma-separated.
-Owner: **REPLACE_ME**
+Value: **none in this repo.** `MUNINN_ADMIN_IDENTS` comes from the nais secret
+named by `admin_secret` in `nais/vars-q2.json`. See §10 for creating it.
+Owner: **@navikt/teammelosys**
+
+This used to be `admin_oids` in the vars file. It is the one *value* in this
+repo that is about people rather than infrastructure — an `oid` is a **stable
+personal identifier for a named human** in the directory — and this repo is
+public, so it moved into a secret. Nothing else here changed: it is still a
+comma-separated list, still matched case-insensitively, still a second axis on
+top of the group in §2 (who is an operator) and never a second gate at the door.
 
 ⚠️ **Use `oid` values, not NAVidents.** A NAVident is re-issued when someone
 leaves, so the newcomer who inherits it would resolve to `admin` on their first
@@ -109,9 +129,14 @@ login. `user_identities` is keyed on `oid` and refuses to adopt the account, but
 this allowlist has no such protection. Role matching accepts either, so nothing
 forces the safe choice — this line is the only thing that does.
 
+The durable answer is not a better-curated list: resolve the admin role from the
+**`groups` claim** the manifest already requests, and then no personal
+identifier exists in any deploy artifact, secret or otherwise. That is a change
+in muninn, not here.
+
 ## 6. Cloud SQL, and a schema step with the actor named on every line
 
-Owner: **REPLACE_ME**
+Owner: **@navikt/teammelosys**
 
 The full runbook is `db-setup.md`. The short version, and the reason it is not
 automated: **the nais app user cannot create extensions**, and `db/init.sql`
@@ -136,7 +161,7 @@ either deploy once expecting a crash-loop, or scale to zero replicas first.
 
 ## 7. The model — decided, with one procurement question left
 
-Owner: **REPLACE_ME** · Decision: **Team KI** (the region and model half is answered)
+Owner: **@navikt/teammelosys** · Decision: **Team KI** (the region and model half is answered)
 
 There is no model credential in this repo at all. The pod authenticates to
 **GCP Vertex AI** with its own workload-identity service account, so the ROS
@@ -192,7 +217,7 @@ the egress host is derived by the deploy workflow from those two and passed to
 first run hard-fails on it, and filled in by hand the computed `VAR` silently
 overrides it — which is the duplicate-value failure the derivation exists to
 remove, rebuilt.
-Owner: **REPLACE_ME**
+Owner: **@navikt/teammelosys**
 
 nais egress is default-deny, so every external host is enumerated. Four notes:
 
@@ -228,7 +253,7 @@ nais egress is default-deny, so every external host is enumerated. Four notes:
 ## 9. The registry and the deploy identity
 
 Values: the team's GAR access, and `MUNINN_REPO` in `.github/workflows/deploy.yml`.
-Owner: **REPLACE_ME**
+Owner: **@navikt/teammelosys**
 
 The push is wired: `nais/docker-build-push@v0` does the `nais/login`, names the
 image and pushes it, and `nais/deploy/actions/deploy@v2` applies the manifest.
@@ -262,6 +287,40 @@ Two properties of that pipeline worth knowing before someone "simplifies" them:
    `image` field is *not* the place to read it: the action's default date-sha tag
    outranks a custom one (priority 9002 vs 9001), so that field names the
    date-sha.
+
+## 10. The `MUNINN_ADMIN_IDENTS` secret
+
+Value: a Kubernetes secret in the namespace, named by `admin_secret` in
+`nais/vars-q2.json` (`melosys-muninn-q2-admin-idents`), carrying **one key,
+spelled exactly `MUNINN_ADMIN_IDENTS`**, whose value is the comma-separated oid
+list from §5.
+Owner: **@navikt/teammelosys**
+
+This is the only prerequisite that is a *cluster action rather than a value*,
+and it exists because the repo is public (§5). `nais/app.yaml` mounts it with
+
+```yaml
+envFrom:
+  - secret: {{ admin_secret }}
+```
+
+Three things about it, each of which has a distinct failure:
+
+- **The key name is not free.** `envFrom` injects a secret's keys verbatim as
+  environment variables, so a key called `admin_oids` or `ADMIN_IDENTS` produces
+  a pod with no `MUNINN_ADMIN_IDENTS` at all.
+- **The two half-done states fail differently, and telling them apart is the
+  difference between looking at the cluster and looking at the code.** An
+  **absent** secret never reaches muninn: the kubelet reports
+  `CreateContainerConfigError` and there is no application log. A secret that
+  exists with a wrong or empty key does reach muninn, and its boot assert
+  refuses to start with a message naming the variable — `MUNINN_AUTH="entra"`
+  requires a non-empty list, because in that mode it *is* the role source.
+- **An empty list is not a safe default.** It does not mean "no admins"
+  in a useful sense; it means the boot refuses. Set it to at least one oid.
+
+It gates the **first deploy**, not the push: publishing the repo needs only the
+file half of this change (`admin_oids` gone, `envFrom` in).
 
 ---
 

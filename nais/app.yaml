@@ -148,6 +148,30 @@ spec:
     - {{ ingress_intern }}
     - {{ ingress_ansatt }}
 
+  # MUNINN_ADMIN_IDENTS arrives HERE, not in `env:` below, and this repo is
+  # PUBLIC — that is the whole reason. An `oid` is a stable personal identifier
+  # for a named human in the directory, so a checked-in list of them is
+  # personopplysninger, unlike every other value in vars-q2.json, which is
+  # infrastructure naming.
+  #
+  # `envFrom` injects the secret's keys VERBATIM, so the key inside this secret
+  # must be literally `MUNINN_ADMIN_IDENTS`. Somebody has to create it in the
+  # namespace out of band — docs/PREREQUISITES.md §10 — and doing half of it is
+  # a dead pod in two different ways, which fail differently enough to be worth
+  # recognising: an ABSENT secret is a kubelet CreateContainerConfigError with no
+  # muninn log at all, while a secret present with a missing or misspelled key
+  # reaches muninn's own boot assert, which refuses to start and says why.
+  #
+  # The name is ours rather than `{{ app_name }}`: nais names its own generated
+  # secrets after the app. No collision rule is documented — this is hygiene,
+  # not a cited constraint.
+  #
+  # The durable fix is not a longer allowlist: resolve admin from the `groups`
+  # claim the manifest already requests, and no personal identifier exists in
+  # any deploy artifact, secret or otherwise. That is a muninn change.
+  envFrom:
+    - secret: {{ admin_secret }}
+
   env:
     # --- what this process is ------------------------------------------------
     - name: MUNINN_PROFILE
@@ -166,12 +190,6 @@ spec:
       value: "entra"
     - name: MUNINN_TENANT
       value: {{ tenant }}
-    # Prefer OID entries. A NAVident is RE-ISSUED when someone leaves, and this
-    # list has no protection against that — the newcomer who inherits the ident
-    # would resolve to admin on their first login. (`user_identities` is keyed
-    # on oid and refuses to adopt the account, but this list is not.)
-    - name: MUNINN_ADMIN_IDENTS
-      value: {{ admin_oids }}
     # BOTH ingress origins, verbatim, with the scheme, comma-separated. This
     # stops the pod TWICE if it is wrong: an authenticating mode refuses to BOOT
     # on an empty value, and the origin check compares Origin against this list
