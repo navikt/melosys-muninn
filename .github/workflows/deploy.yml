@@ -1,19 +1,27 @@
 name: deploy
 
-# Builds an image from PUBLIC muninn at a pinned tag, overlaid with this repo's
-# bot folder, and deploys it to dev-gcp. Nothing in the public repo is edited:
-# the only thing this workflow adds to the checkout is `Dockerfile.dockerignore`,
-# which BuildKit prefers over `.dockerignore` and which lets `bots/` through.
+# Builds an image from PUBLIC muninn at a pinned ref, overlaid with this repo's
+# bot folder, asserts it, pushes it to the team's GAR and deploys it to dev-gcp.
+# Nothing in the public repo is edited: the only things this workflow changes in
+# the checkout are `bots/` (replaced wholesale) and one line removed from
+# `.dockerignore`.
 #
-# The tag is an INPUT with no default that floats. A deploy should name the
+# The ref is an INPUT with no default that floats. A deploy should name the
 # muninn commit it shipped, and `main` is not a name — a rollback needs to be
-# "redeploy tag X", not "hope main has not moved".
+# "redeploy tag X", not "hope main has not moved". Whatever is passed, the
+# workflow resolves it to a SHA immediately after the checkout and uses that
+# SHA everywhere: a tag can be moved upstream, so "redeploy tag X" is only
+# reproducible if the artifacts carry the commit the tag pointed at.
+#
+# `workflow_dispatch` ONLY. A pull request from a fork therefore can never run
+# this and never sees a secret. Do not add a `pull_request` trigger without
+# re-reading that sentence.
 
 on:
   workflow_dispatch:
     inputs:
       muninn_ref:
-        description: "Tag or commit SHA in navikt-external/muninn to build (not a branch)"
+        description: "Tag or commit SHA in the public muninn repo to build (not a branch)"
         required: true
       cluster:
         description: "nais cluster"
@@ -22,29 +30,57 @@ on:
         type: choice
         options: [dev-gcp]
 
+# WORKFLOW level, not job level. The one job below is the whole pipeline today,
+# but every `nais/login` and `nais/deploy` needs `id-token: write`, and a job
+# added later (see the fallback shape in the mimir plan) would silently get none.
+permissions:
+  contents: read
+  id-token: write
+
 env:
   MUNINN_REPO: REPLACE_ME_public_muninn_repo   # e.g. owner/muninn
-  IMAGE_NAME: muninn
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - name: Check out this repo (manifest + bot folder)
         uses: actions/checkout@v4
         with:
           path: deploy
 
-      # A branch name would make the image unreproducible and the rollback
-      # story a guess. Refuse one here rather than discovering it at 02:00.
-      - name: The ref must not be a branch
+      # BEFORE the ref guard, and the order is deliberate. The guard below
+      # queries the remote, so with a placeholder repo it dies on a git
+      # transport error — fail-closed either way, but misdiagnosed on the very
+      # first run of a fresh clone.
+      - name: MUNINN_REPO must be filled in
         run: |
-          REF="${{ inputs.muninn_ref }}"
-          if [ "$REF" = "main" ] || [ "$REF" = "master" ]; then
-            echo "::error::refusing to build a branch — pass a tag or a commit SHA"; exit 1
+          case "$MUNINN_REPO" in
+            REPLACE_ME*|"") echo "::error::MUNINN_REPO is still a placeholder — see docs/PREREQUISITES.md §9"; exit 1 ;;
+          esac
+
+      # A branch name makes the image unreproducible and the rollback story a
+      # guess. Ask the remote rather than testing two literal strings: a guard
+      # that only knows `main` and `master` waves `feature/x` straight through.
+      #
+      # Two details, and both are load-bearing. `MUNINN_REPO` is an `owner/repo`
+      # slug (it is fed to actions/checkout's `repository:`), so it is not a
+      # valid remote on its own — hence the URL. And the EXIT STATUS is checked
+      # separately from the output: "returns empty" is also satisfied by a
+      # command that errored, which would wave every branch through.
+      #
+      # `$REF` is read through `env:` rather than interpolated into the script
+      # body — a `${{ inputs.* }}` inside `run:` is a script-injection surface,
+      # bounded here by who may workflow_dispatch, but free to close.
+      - name: The ref must not be a branch
+        env:
+          REF: ${{ inputs.muninn_ref }}
+        run: |
+          if ! out=$(git ls-remote --heads "https://github.com/$MUNINN_REPO" "$REF"); then
+            echo "::error::could not query $MUNINN_REPO for branches — cannot prove '$REF' is not one"; exit 1
+          fi
+          if [ -n "$out" ]; then
+            echo "::error::'$REF' is a BRANCH in $MUNINN_REPO — pass a tag or a commit SHA"; exit 1
           fi
 
       - name: Check out public muninn at the pinned ref
@@ -54,25 +90,113 @@ jobs:
           ref: ${{ inputs.muninn_ref }}
           path: muninn
 
-      # Every value the team has to supply lives in vars-q2.json, and a
-      # half-filled file is the failure mode that deploys something wrong and
-      # quietly. Fail on the placeholder, before anything is built.
-      - name: No placeholder survives
+      # Resolve the ref to a SHA FIRST, and use the SHA for everything after
+      # this line. Nothing else names the muninn commit: the build action's
+      # default tag is a date-sha over THIS repo's GITHUB_SHA, `.dockerignore`
+      # excludes `.git/` so the image carries no history, and muninn has no
+      # endpoint that reports a source commit (/api/dashboard-build-hash is a
+      # SHA-1 of two client bundles). Without these two lines the whole
+      # traceability argument for not forking rests on Actions run history.
+      - name: Resolve the muninn ref to a commit SHA
+        run: echo "MUNINN_SHA=$(git -C muninn rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      # ---------------------------------------------------------------------
+      # Three steps, in this order, and the order is the whole trick:
+      #   1. refuse a placeholder in the VARS file        (before the assign)
+      #   2. derive the Vertex base URL and assign it     (before the overlay)
+      #   3. refuse a placeholder in the BOT folder       (backstop)
+      # Step 1 must precede step 2 or the assign bakes REPLACE_ME_gcp_project_id
+      # into every request URL. Step 2 must precede the OVERLAY COPY below, not
+      # merely "the build" — placed after it, step 3's grep reads the copy that
+      # was already assigned while the image bakes the unassigned one.
+      # ---------------------------------------------------------------------
+
+      - name: No placeholder survives in the vars file
         run: |
           if grep -n "REPLACE_ME" deploy/nais/vars-q2.json; then
             echo "::error::vars-q2.json still has placeholders — see docs/PREREQUISITES.md"; exit 1
           fi
+
+      # The project and the region would otherwise live in FOUR places that
+      # nothing compares: the bot's `baseUrl` (twice — project and region), the
+      # manifest's `gcp.permissions`, the manifest's `VERTEX_PROJECT_ID` /
+      # `VERTEX_REGION`, and the egress host. nais VARS templating rewrites only
+      # the file passed as RESOURCE, so it never touches `bots/`.
+      #
+      # A project mismatch means `roles/aiplatform.user` is granted on one
+      # project while every turn calls another: Google answers 403, the
+      # connector's refresh matches 401 only, so there is no retry and no
+      # diagnostic. A region mismatch means the egress allowlist names a host
+      # nothing dials. Both are silent.
+      #
+      # So this ASSIGNS rather than compares — there is nothing left to
+      # disagree with afterwards — and the egress host is COMPUTED and handed to
+      # nais/deploy, so no one maintains it either.
+      - name: Derive the Vertex base URL, assign it into the bot folder
+        run: |
+          PROJECT=$(jq -r '.gcp_project // ""' deploy/nais/vars-q2.json)
+          REGION=$(jq -r '.vertex_region // ""' deploy/nais/vars-q2.json)
+          TEAM=$(jq -r '.team // ""' deploy/nais/vars-q2.json)
+          for pair in "gcp_project=$PROJECT" "vertex_region=$REGION" "team=$TEAM"; do
+            case "$pair" in
+              *=|*=null) echo "::error::${pair%%=*} is missing from vars-q2.json"; exit 1 ;;
+            esac
+          done
+
+          # muninn refuses `global` at boot in either Vertex variable name, and
+          # again on the URL itself — the region routes to whichever region has
+          # capacity and does not report which, so it cannot satisfy a
+          # deployment that must keep inference inside a named jurisdiction.
+          # Caught here it is a red step; caught there it is a CrashLoopBackOff.
+          case "$REGION" in
+            global) echo "::error::vertex_region=global is refused — muninn will not boot on it"; exit 1 ;;
+          esac
+
+          # The shape rule is muninn's own (`vertexOpenAiBaseUrl`,
+          # src/ai/haiku-vertex.ts): a location containing a hyphen is a REGION
+          # and takes the prefix form; anything else is a MULTI-REGION name with
+          # its own host and no prefix form at all. Do not re-derive this as an
+          # allowlist of known multi-regions — that diverges silently on the
+          # first unfamiliar value, which is the failure this step exists
+          # against. `eu` is not hypothetical: it is where every Claude lives,
+          # and Team KI's question about it is still open.
+          case "$REGION" in
+            *-*) HOST="${REGION}-aiplatform.googleapis.com" ;;
+            *)   HOST="aiplatform.${REGION}.rep.googleapis.com" ;;
+          esac
+          BASE_URL="https://${HOST}/v1/projects/${PROJECT}/locations/${REGION}/endpoints/openapi"
+          echo "base url: $BASE_URL"
+
+          # `deploy/bots/`, NOT `muninn/bots/`: this is the copy the backstop
+          # grep below reads and the copy the overlay step copies FROM.
+          for f in deploy/bots/*/config.json; do
+            jq --arg u "$BASE_URL" '.baseUrl = $u' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+            echo "assigned baseUrl in $f"
+          done
+
+          # A step cannot hand a value to a later step's `env:` any other way,
+          # and there is exactly ONE `VAR:` line on the deploy — see the comment
+          # there. `team` rides along for the same reason the base URL does:
+          # hardcoding it in the build step while vars-q2.json carries its own
+          # copy for `labels.team` would push to one team's GAR and label the
+          # app with another.
+          {
+            echo "VERTEX_HOST=$HOST"
+            echo "TEAM=$TEAM"
+          } >> "$GITHUB_ENV"
+
+      # A genuine backstop now, not the mechanism: it fires only if the assign
+      # above was removed or matched nothing. That is also why the checked-in
+      # `baseUrl` key is literally `REPLACE_ME_vertex_baseurl` — a jq assign
+      # would happily CREATE a missing key, and then this grep would have
+      # nothing to catch.
+      - name: No placeholder survives in the bot folder
+        run: |
           if grep -rn "REPLACE_ME" deploy/bots/; then
             echo "::error::a placeholder survives in the bot folder"; exit 1
           fi
-          case "$MUNINN_REPO" in
-            REPLACE_ME*) echo "::error::MUNINN_REPO is still a placeholder"; exit 1 ;;
-          esac
 
-      # The overlay, and the one file that makes it land. `COPY bot[s] ./bots/`
-      # in muninn's Dockerfile tolerates an absent folder, which means a build
-      # that copies NOTHING succeeds — so the assertion below is not optional.
-      - name: Overlay the bot folder and the build-context ignore
+      - name: Overlay the bot folder and derive the build-context ignore
         run: |
           # `rm -rf` FIRST, and it is not tidiness. Public muninn TRACKS
           # `bots/jarvis/`, and this deployment's whole trick is dropping the
@@ -86,56 +210,128 @@ jobs:
           rm -rf muninn/bots
           mkdir -p muninn/bots
           cp -R deploy/bots/. muninn/bots/
-          cp deploy/build/Dockerfile.dockerignore muninn/Dockerfile.dockerignore
           ls -la muninn/bots
 
-      - name: Build
-        working-directory: muninn
-        run: |
-          docker build \
-            --build-arg WITH_MEDIA=false \
-            --build-arg WITH_CLI=false \
-            --build-arg WITH_EMBEDDINGS=true \
-            -t "${IMAGE_NAME}:${{ github.sha }}" .
+          # DERIVED, not a checked-in second copy. `nais/docker-build-push`
+          # reads the ignore file at the CONTEXT root (./muninn/.dockerignore),
+          # so the BuildKit `Dockerfile.dockerignore` precedence trick is no
+          # longer needed — and that trick is worth retiring anyway: buildx
+          # honours the dockerfile-specific file for local path contexts (our
+          # case) but not for every context type.
+          #
+          # The grep is the point. A hand-maintained copy silently omits any
+          # exclusion upstream adds later; deriving it means an upstream RENAME
+          # breaks the build instead of passing quietly.
+          grep -q '^bots/$' muninn/.dockerignore || {
+            echo "::error::muninn/.dockerignore no longer excludes bots/ — re-check the overlay"; exit 1
+          }
+          grep -v '^bots/$' muninn/.dockerignore > /tmp/di && mv /tmp/di muninn/.dockerignore
 
-      # Acceptance 24's positive half. It asserts the EXACT SET, not "contains":
-      # too few is a CrashLoopBackOff, and too many is a broken bot offered to a
-      # colleague in the picker — both have happened here.
+      # Build WITHOUT pushing, and load the result into the local daemon, so the
+      # assertions below run against the artifact before it can reach GAR. The
+      # action's salsa/attest step is gated on push_image == 'true', so this call
+      # cannot fail on attestation and salsa does not need turning off for it.
+      #
+      # `docker_context` is existence-checked and may be a subdirectory; files a
+      # preceding step copied in are used as-is. `dockerfile` is deliberately
+      # NOT set: the action uses it VERBATIM rather than joining it to the
+      # context, so `dockerfile: Dockerfile` would look right and resolve to the
+      # wrong path. Unset, it defaults to ./muninn/Dockerfile.
+      #
+      # `platforms` is deliberately omitted (builds the runner's platform only).
+      # melosys-console builds linux/amd64,linux/arm64; nais runs amd64, and
+      # arm64 under QEMU with a HuggingFace model bake on the critical path buys
+      # nothing.
+      #
+      # NOTE this shape is reasoned, not measured: `outputs: type=docker`
+      # through this action has not been exercised here. If the local load
+      # misbehaves, the fallback is a third job between build and deploy
+      # (nais/login → docker pull → the same assertions) — the shape
+      # melosys-console's prod job uses. Four things do not survive that move;
+      # they are enumerated in the mimir plan, and the sharpest is that
+      # $GITHUB_ENV is job-scoped, so MUNINN_SHA, VERTEX_HOST *and TEAM* vanish.
+      - name: Build the image and load it locally, without pushing
+        id: docker-assert
+        uses: nais/docker-build-push@v0
+        with:
+          team: ${{ env.TEAM }}
+          docker_context: ./muninn
+          # Explicit on BOTH calls, and the same value. The action's own default
+          # tag embeds a MINUTE-resolution timestamp, so two invocations either
+          # side of a minute boundary produce different names.
+          tag: muninn-${{ env.MUNINN_SHA }}
+          build_args: |
+            WITH_MEDIA=false
+            WITH_CLI=false
+            WITH_EMBEDDINGS=true
+          push_image: false
+          outputs: type=docker
+
+      # Acceptance D1. The bot check asserts the EXACT SET, not "contains": too
+      # few is a CrashLoopBackOff (discoverAllBots exits 1 on zero folders), and
+      # too many is a broken bot offered to a colleague in the picker. Both have
+      # happened here.
+      #
+      # The image reference comes from the ACTION rather than being rebuilt by
+      # hand — the non-push call still sets outputs.image, to the locally-loaded
+      # digest-less tag, so this needs no GAR base path and does not depend on
+      # the two calls having agreed on a tag.
       - name: The image contains exactly this repo's bots
+        env:
+          IMG: ${{ steps.docker-assert.outputs.image }}
         run: |
-          GOT=$(docker run --rm --entrypoint sh "${IMAGE_NAME}:${{ github.sha }}" -c 'ls -1 /app/bots' | sort)
+          GOT=$(docker run --rm --entrypoint sh "$IMG" -c 'ls -1 /app/bots' | sort)
           WANT=$(ls -1 deploy/bots | sort)
           echo "want: $WANT"
           echo "got:  $GOT"
           [ -n "$GOT" ] || { echo "::error::/app/bots is empty — the overlay did not land"; exit 1; }
           [ "$GOT" = "$WANT" ] || { echo "::error::/app/bots is not this repo's bot set"; exit 1; }
           for bot in $WANT; do
-            docker run --rm --entrypoint sh "${IMAGE_NAME}:${{ github.sha }}" \
+            docker run --rm --entrypoint sh "$IMG" \
               -c "test -s /app/bots/$bot/CLAUDE.md" \
               || { echo "::error::$bot has no CLAUDE.md in the image — discoverAllBots would exit 1"; exit 1; }
           done
 
       - name: The image carries no CLI and no ffmpeg
+        env:
+          IMG: ${{ steps.docker-assert.outputs.image }}
         run: |
-          if docker run --rm --entrypoint sh "${IMAGE_NAME}:${{ github.sha }}" -c 'command -v claude'; then
+          if docker run --rm --entrypoint sh "$IMG" -c 'command -v claude'; then
             echo "::error::the Claude CLI is in the image"; exit 1
           fi
-          if docker run --rm --entrypoint sh "${IMAGE_NAME}:${{ github.sha }}" -c 'command -v ffmpeg'; then
+          if docker run --rm --entrypoint sh "$IMG" -c 'command -v ffmpeg'; then
             echo "::error::ffmpeg is in the image"; exit 1
           fi
 
-      # The bake is silent when it fails at runtime (warmupEmbeddings catches),
-      # so the image is where it gets checked.
+      # The bake is silent when it fails at build time (warmupEmbeddings catches
+      # and logs), so the image is where it gets checked. The pod's half of this
+      # is the `Embedding model ready` boot line, not a second file test.
       - name: The embedding model is baked
+        env:
+          IMG: ${{ steps.docker-assert.outputs.image }}
         run: |
-          docker run --rm --entrypoint sh "${IMAGE_NAME}:${{ github.sha }}" \
+          docker run --rm --entrypoint sh "$IMG" \
             -c 'test -s node_modules/@huggingface/transformers/.cache/Xenova/all-MiniLM-L6-v2/onnx/model_quantized.onnx' \
             || { echo "::error::WITH_EMBEDDINGS=true produced no model weights"; exit 1; }
 
-      - name: Push to GAR
-        run: |
-          echo "::error::REPLACE_ME — wire up the team's GAR push (nais/login + docker push)"
-          exit 1
+      # `team`, `docker_context`, `build_args` and `tag` are repeated VERBATIM.
+      # That identity is the only thing tying the asserted image to the pushed
+      # one — a second call missing the three build args would push an image
+      # sharing nothing with the one that passed. Digest equality cannot be the
+      # backstop: a type=docker export and a pushed OCI image are different
+      # artifacts. The push reuses the shared type=gha cache, so this is fast.
+      - name: Push the asserted image to GAR
+        id: docker-push
+        uses: nais/docker-build-push@v0
+        with:
+          team: ${{ env.TEAM }}
+          docker_context: ./muninn
+          tag: muninn-${{ env.MUNINN_SHA }}
+          build_args: |
+            WITH_MEDIA=false
+            WITH_CLI=false
+            WITH_EMBEDDINGS=true
+          salsa: true
 
       - name: Deploy to nais
         uses: nais/deploy/actions/deploy@v2
@@ -143,4 +339,19 @@ jobs:
           CLUSTER: ${{ inputs.cluster }}
           RESOURCE: deploy/nais/app.yaml
           VARS: deploy/nais/vars-q2.json
-          VAR: image=REPLACE_ME_gar_path:${{ github.sha }}
+          # The PUSH call's id, never the assertion call's: only a pushed build
+          # gets `@sha256:…` appended (the action gates that on
+          # push_image == 'true'), so wiring this from the assertion call would
+          # deploy an un-digest-pinned tag while every assertion above still
+          # passed. Without this line `app.yaml`'s `image: {{ image }}` renders
+          # unresolved.
+          IMAGE: ${{ steps.docker-push.outputs.image }}
+          # ONE comma-separated input, not one per value. Two `VAR:` keys in one
+          # `env:` mapping is a YAML error at best and last-one-wins at worst,
+          # which would drop `muninn_ref` and leave `{{ muninn_ref }}`
+          # unrendered. A future repair to either half edits THIS line.
+          #
+          # Both halves come from $GITHUB_ENV, written by earlier steps in this
+          # same job. If a job boundary is ever introduced between them and
+          # here, this renders "muninn_ref=,vertex_host=" with no error.
+          VAR: "muninn_ref=${{ env.MUNINN_SHA }},vertex_host=${{ env.VERTEX_HOST }}"

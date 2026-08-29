@@ -35,17 +35,39 @@ app at all. The harness measured exactly that locally.
 So the sequence is:
 
 1. Buy §1–§4 (app registration + consent + group + the two ingresses).
-2. Deploy something — a stub, or this image with a database that is not yet
-   provisioned, which crash-loops on purpose but still serves nothing.
+2. Deploy a **stub** `Application` — same `app_name`, same `azure` block, same
+   sidecar settings and ingresses, applied with `nais/deploy` **outside** the
+   placeholder-guarded deploy workflow.
 3. Only then can the upgrade be attempted end to end.
+
+**It must be a stub, and it must be a WebSocket echo server.** Two shortcuts
+look available here and neither is:
+
+- *"Deploy this image with a database that is not yet provisioned."* Dead. The
+  entrypoint runs under `set -eu` and calls `bun db/require-provisioned.ts`
+  **before** the server starts, so an unprovisioned pod exits rather than
+  degrading. There is no `/api/live`, no upstream behind the ingress, and a
+  `/chat/ws` upgrade cannot reach the app at all — the proof would prove nothing.
+- *"Any hello-world image will do."* No: a plain HTTP server answers an upgrade
+  request as an ordinary request, which is one of the failure signatures below.
+  A hello-world stub reports the very failure it is meant to detect. It has to
+  echo, which means an image in an allowed registry — a one-off build pushed to
+  the team GAR, or a third-party image mirrored there. That is a real cost.
+
+And the stub must carry the **same `app_name` as the real app**: nais provisions
+one Entra application registration per `Application`, so a differently-named stub
+needs its own registration and its own admin consent — the slowest procurement
+item, done twice — and two `Application`s cannot both claim one ingress host
+anyway. The first real deploy then replaces it.
 
 There is no shortcut that proves the sidecar half without the login half.
 
 ## How to check it
 
-Open the ingress in a browser, complete the wonderwall login, land on `/chat`,
-and watch the network panel for the `/chat/ws` upgrade. What you are looking for,
-in order:
+Open the ingress in a browser and complete the wonderwall login, then open a
+WebSocket to the stub's echo path from the page's own origin (the browser
+console is enough) and watch the network panel. Do this from **both** ingress
+domains. What you are looking for, in order:
 
 - **101 Switching Protocols.** A 401 means the token did not arrive; a 200 with
   an HTML body means something in the path answered the upgrade as an ordinary
@@ -53,8 +75,10 @@ in order:
 - **The socket stays open past ~60s.** An ingress that closes idle upgrades
   turns every long turn into a dropped answer. muninn's client retries in ~2 s,
   but the turn in flight does not come back.
-- **A turn completes over it** — send a message and get a streamed reply, not
-  just a connected socket.
+A third check — *a turn completes over it*, a message in and a streamed reply
+out — is **not** part of step zero. An echo stub cannot answer one, and it needs
+the model and the database, i.e. everything step zero exists to avoid buying
+first. It belongs to acceptance, after the first real deploy.
 
 ## The three ways this fails that are not the ingress
 

@@ -13,9 +13,9 @@
   "group_muninn_bruker": "REPLACE_ME_group_object_id",
   "admin_oids": "REPLACE_ME_comma_separated_oids",
 
+  "_comment_vertex": "There is deliberately no `vertex_host` key. The egress host is DERIVED by the deploy workflow from gcp_project + vertex_region and passed to nais/deploy as a VAR — leave it out and it stays that way. Adding it back means either a REPLACE_ME the first run hard-fails on, or a hand-filled value the computed VAR silently overrides.",
   "gcp_project": "REPLACE_ME_gcp_project_id",
   "vertex_region": "REPLACE_ME_vertex_region",
-  "vertex_host": "REPLACE_ME_vertex_host",
 
   "db_instance": "muninn-db",
   "db_name": "muninn",

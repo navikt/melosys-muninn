@@ -12,8 +12,11 @@ lives in.
 `bots/*` is gitignored in public muninn and only `bots/jarvis/` is tracked, so a
 build from that repo contains no bot. `discoverAllBots()` finding zero folders
 calls `process.exit(1)` — the failure is a CrashLoopBackOff, not an empty chat.
-This folder is copied into the build context by `.github/workflows/deploy.yml`
-and let through by `build/Dockerfile.dockerignore`.
+This folder is copied into the build context by `.github/workflows/deploy.yml`,
+which also strips the `bots/` line out of the checkout's own `.dockerignore` —
+**derived in the workflow, behind a `grep -q` that refuses if the line is not
+there**, rather than checked in as a second copy of that file. An upstream
+rename breaks the build instead of silently dropping an exclusion.
 
 A bot needs only a `CLAUDE.md` to be discovered. Platform tokens (Telegram,
 Slack) are what make it a *live bot*, and this one deliberately has none:

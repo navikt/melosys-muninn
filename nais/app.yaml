@@ -120,6 +120,17 @@ spec:
         # nais egress is default-deny. Anything not listed here does not exist
         # as far as the pod is concerned — which is also the safety net under
         # the model-region decision: an unapproved endpoint fails closed.
+        #
+        # `vertex_host` is NOT in vars-q2.json. The deploy workflow computes it
+        # from gcp_project + vertex_region and passes it as a VAR, because
+        # Vertex has TWO host shapes — `<region>-aiplatform.googleapis.com` for
+        # a region, `aiplatform.<mr>.rep.googleapis.com` for a multi-region —
+        # and a hand-maintained copy of one of them is an allowlist naming a
+        # host nothing dials the day the other shape is needed.
+        #
+        # NOT listed, deliberately: the metadata server the credential comes
+        # from (metadata.google.internal). It is node-local and outside
+        # accessPolicy. See docs/PREREQUISITES.md §8.
         - host: {{ vertex_host }}
 
   resources:
@@ -141,6 +152,16 @@ spec:
     # --- what this process is ------------------------------------------------
     - name: MUNINN_PROFILE
       value: "nais"
+    # Provenance, and the only place the pod itself states which muninn commit
+    # it is running. Passed as a VAR by the workflow, resolved from the
+    # dispatched ref to a SHA so that a moved upstream tag cannot rewrite
+    # history. muninn does not read this; `kubectl exec … env` does, and so does
+    # acceptance D5. NB the deployed Application's `image` field names the
+    # action's DEFAULT date-sha tag, not `muninn-<sha>` — the default outranks a
+    # custom tag (priority 9002 vs 9001), so traceability comes from this
+    # variable and the GAR tag beside it, never from that field.
+    - name: MUNINN_REF
+      value: {{ muninn_ref }}
     - name: MUNINN_AUTH
       value: "entra"
     - name: MUNINN_TENANT

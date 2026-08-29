@@ -186,15 +186,26 @@ change — which is why nothing here hardcodes one of the two Vertex host shapes
 
 ## 8. Egress, and the texas annotation
 
-Value: `vertex_host`, `gcp_project`.
+Values: `gcp_project`, `vertex_region`. **There is no `vertex_host` to supply** —
+the egress host is derived by the deploy workflow from those two and passed to
+`nais/deploy` as a `VAR`. Do not add the key back: left in as a `REPLACE_ME` the
+first run hard-fails on it, and filled in by hand the computed `VAR` silently
+overrides it — which is the duplicate-value failure the derivation exists to
+remove, rebuilt.
 Owner: **REPLACE_ME**
 
 nais egress is default-deny, so every external host is enumerated. Four notes:
 
-- The model host is the only entry in `accessPolicy.outbound.external` today.
-  Whether Vertex traffic needs one at all, or routes over Google-private paths,
-  is **unverified** — a question for nais/Team KI rather than something to
-  assume. Listing it costs nothing and fails closed, so it is listed.
+- The model host is the only entry in `accessPolicy.outbound.external` today,
+  and it is **computed, not maintained**. Vertex has two host shapes —
+  `<region>-aiplatform.googleapis.com` for a region,
+  `aiplatform.<mr>.rep.googleapis.com` for a multi-region — and the workflow
+  applies muninn's own rule (a hyphen in the location means the first form).
+  A hardcoded copy of one shape is an allowlist naming a host nothing dials the
+  day the other is needed, which is not hypothetical: `eu` is where every Claude
+  lives. Whether Vertex traffic needs an egress entry at all, or routes over
+  Google-private paths, is **unverified** — a question for nais/Team KI rather
+  than something to assume. Listing it costs nothing and fails closed.
 - **The credential hop is not in that list, deliberately.** Application Default
   Credentials are fetched from `http://metadata.google.internal/computeMetadata/v1/…`
   on a 700 ms budget. The assumption is that GKE metadata is node-local and
@@ -216,13 +227,41 @@ nais egress is default-deny, so every external host is enumerated. Four notes:
 
 ## 9. The registry and the deploy identity
 
-Values: the GAR path, and `MUNINN_REPO` in `.github/workflows/deploy.yml`.
+Values: the team's GAR access, and `MUNINN_REPO` in `.github/workflows/deploy.yml`.
 Owner: **REPLACE_ME**
 
-melosys-console's precedent is
-`europe-north1-docker.pkg.dev/nais-management-233d/<team>`. The workflow has an
-explicit `exit 1` where the push belongs, so a half-wired deploy fails at the
-push rather than deploying a stale image.
+The push is wired: `nais/docker-build-push@v0` does the `nais/login`, names the
+image and pushes it, and `nais/deploy/actions/deploy@v2` applies the manifest.
+Two things still have to exist outside this repo.
+
+- **The team's registry and deploy identity.** `melosys-console`'s precedent is
+  `europe-north1-docker.pkg.dev/nais-management-233d/<team>`; the action derives
+  that path itself from the `team` input, which the workflow reads out of
+  `vars-q2.json` rather than hardcoding — a hardcoded copy beside the file's own
+  `team` value would push to one team's GAR and label the app with another.
+  Nothing here needs a token: the workflow declares `id-token: write` at
+  **workflow** level and `nais/login` federates.
+
+  Note the **image is named after this repo**, lowercased — so it is
+  `…/<team>/melosys-muninn`, not `…/<team>/muninn`.
+
+- **`MUNINN_REPO`** — the `owner/repo` slug of PUBLIC muninn. It is still a
+  placeholder, and the workflow refuses on it before it queries anything.
+
+Two properties of that pipeline worth knowing before someone "simplifies" them:
+
+1. **The image is asserted BEFORE it is pushed.** The action is called twice —
+   once with `push_image: false` and `outputs: type=docker`, which loads the
+   image into the runner's daemon for four `docker run` assertions, and once to
+   push from the shared cache. A bad image therefore never reaches GAR. The two
+   calls repeat `team`, `docker_context`, `build_args` and `tag` verbatim: that
+   identity is the only thing tying the asserted image to the pushed one.
+2. **A deploy names the muninn commit it shipped.** The dispatched ref is
+   resolved to a SHA right after the checkout, and that SHA becomes both a GAR
+   tag (`muninn-<sha>`) and the pod's `MUNINN_REF`. The deployed `Application`'s
+   `image` field is *not* the place to read it: the action's default date-sha tag
+   outranks a custom one (priority 9002 vs 9001), so that field names the
+   date-sha.
 
 ---
 
