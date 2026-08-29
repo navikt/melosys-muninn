@@ -32,12 +32,25 @@ upgrade round-trips through the ingress *and* the wonderwall sidecar. The socket
 is the only channel a chat-only pod has; if it does not survive the sidecar,
 nothing below matters.
 
-It is first but it is not free: proving it *through the sidecar* needs §2, §3
-and §4 already in place, because `autoLogin` refuses an unauthenticated upgrade
-at the sidecar and it never reaches the app. `scripts/wonderwall-ws-harness.sh`
-in the muninn repo established the header behaviour locally — a WS upgrade does
-arrive carrying `Authorization: Bearer`, and the session cookie is `SameSite=Lax`.
-The ingress is the untested half. See `step-zero-websocket.md`.
+It is first but it is not free: proving it *through the sidecar* needs
+**§1, §2, §3 and §4** already in place, because `autoLogin` refuses an
+unauthenticated upgrade at the sidecar and it never reaches the app. §1 is in
+that list deliberately — an earlier draft of this paragraph said "§2, §3 and
+§4", but the login `autoLogin` performs runs against the app registration and
+its **admin consent**, so leaving §1 out describes a step zero that cannot get
+past the sidecar at all. It also needs the registry and deploy-identity half of
+**§9** to push and apply the stub — but *not* §6 (Cloud SQL), §7 (the GCP
+project and Vertex quota) or §8 (egress), which is the whole point of running it
+first.
+
+`scripts/wonderwall-ws-harness.sh` in the muninn repo established the header
+behaviour locally — a WS upgrade does arrive carrying `Authorization: Bearer`,
+and the session cookie is `SameSite=Lax`. The ingress is the untested half.
+
+**The artifacts are in this repo**: `build/echo/` (the WebSocket echo image —
+build and push by hand) and `nais/step-zero/` (the stub `Application` and its
+own eight-value vars file). See `step-zero-websocket.md` for how to apply them
+and what to look for.
 
 ---
 

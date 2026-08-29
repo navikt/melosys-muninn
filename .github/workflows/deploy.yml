@@ -281,11 +281,21 @@ jobs:
           # name containing a space, so the refusal names a truncated path) and
           # not `find … | while` (a pipeline puts the loop in a subshell, where
           # `found` would not propagate and `exit 1` would not fail the step).
-          # "${RUNNER_TEMP:-/tmp}", not a fixed /tmp path: on a self-hosted or
-          # container runner with a shared /tmp, two concurrent dispatches
-          # truncate the same file while this loop already holds it open — a
-          # short read, i.e. fewer bots inspected, with the step still green.
-          ENTRIES="${RUNNER_TEMP:-/tmp}/bot-entries.$$"
+          # `mktemp`, not a fixed /tmp path and not a `$$` suffix: on a
+          # self-hosted or container runner with a shared /tmp, two concurrent
+          # dispatches truncate the same file while this loop already holds it
+          # open — a short read, i.e. fewer bots inspected, with the step still
+          # green. `$$` does NOT close that: separate PID namespaces sharing a
+          # /tmp mount hand out identical low PIDs. mktemp is unique by
+          # construction, and its failure (an unset-and-unwritable TMPDIR, a
+          # RUNNER_TEMP naming a directory that does not exist) is caught HERE
+          # with a message — a bare redirection died with no `::error::`.
+          # The trap matters for the same shared-/tmp runner: without it the
+          # file is never removed, and they accumulate per dispatch forever.
+          ENTRIES=$(mktemp "${RUNNER_TEMP:-/tmp}/bot-entries.XXXXXXXX") || {
+            echo "::error::could not create a temp file under ${RUNNER_TEMP:-/tmp} — is it missing or read-only?"; exit 1
+          }
+          trap 'rm -f "$ENTRIES"' EXIT
           find deploy/bots -mindepth 1 -maxdepth 1 | sort > "$ENTRIES"
           found=0
           while IFS= read -r e; do
@@ -412,26 +422,56 @@ jobs:
           # Measured:
           #   ghost in the IMAGE only  -> GOT != WANT, this comparison refuses
           #                               (under `ls -1` it was invisible here)
-          #   ghost on BOTH sides      -> GOT == WANT, this comparison PASSES;
-          #                               what refuses it is the per-bot loop
-          #                               below, which now sees it in $WANT.
+          #   ghost on BOTH sides      -> GOT == WANT, this comparison PASSES.
+          # What refuses the both-sides case is the SLUG GUARD in the
+          # bot-folder step, which refuses any name that is not `[a-z0-9-]`
+          # and therefore refuses a dot-entry unconditionally, before the
+          # overlay ever runs. Measured, all three fixtures: image-only ghost
+          # -> this comparison refuses; both-sides ghost -> the slug guard
+          # refuses; a both-sides ghost that somehow reached here WELL-FORMED
+          # (non-empty CLAUDE.md, pinned connector) passes this whole step.
+          # An earlier draft of this comment credited the per-bot loop below,
+          # which is only true when the ghost is MALFORMED — do not restore it.
           # So `-1A` closes the one-sided case AND feeds the dot-entry to the
-          # per-bot assertions. The set comparison alone cannot catch a ghost
-          # that is present on both sides.
-          # pipefail so a docker/daemon failure is reported AS ONE. Both piped
-          # assertions below already fail closed without it (empty stdin makes
-          # `jq -s` yield [] and `length == 1` false), but the operator was then
-          # told the bot had no pinned connector when the real fault was docker.
-          set -o pipefail
-          GOT=$(docker run --rm --entrypoint sh "$IMG" -c 'ls -1A /app/bots' | sort)
+          # per-bot assertions; the set comparison alone cannot catch a ghost
+          # that is present on both sides, and is not what is relied on for it.
+          # FIVE distinguishable states, and each gets its own message. The
+          # listing is SPLIT from the sort rather than piped, because a pipeline
+          # conflates three of them into one status:
+          #   1. docker/daemon failure          -> `docker run` non-zero
+          #   2. /app/bots absent               -> `ls -1A` exits 2
+          #   3. present but empty              -> exit 0, no output
+          #   4. present, set mismatch          -> the comparison below
+          #   5. present, set matches           -> the per-bot loop below
+          # A previous round reached for `set -o pipefail` here instead. It was
+          # inert for the pipeline its comment named (the per-bot `docker run |
+          # jq`: jq is rightmost and already exits non-zero on bad input,
+          # measured identical with and without), and it silenced state 2
+          # ENTIRELY — `bash -e` aborted on this line before the
+          # "overlay did not land" message could be printed, leaving a red step
+          # with no `::error::` annotation at all. State 2 is reachable:
+          # muninn's Dockerfile COPYs `bot[s]` as an OPTIONAL glob, so a second
+          # exclusion added upstream to `.dockerignore` passes the `grep -q`
+          # strip below and yields an image with no /app/bots.
+          if ! RAW=$(docker run --rm --entrypoint sh "$IMG" -c 'ls -1A /app/bots'); then
+            echo "::error::could not list /app/bots in the image — docker failed, or the directory is absent (the Dockerfile COPYs bots/ through an optional glob, so an image without it builds green)"; exit 1
+          fi
+          GOT=$(printf '%s\n' "$RAW" | sort)
           WANT=$(ls -1A deploy/bots | sort)
           echo "want: $WANT"
           echo "got:  $GOT"
           [ -n "$GOT" ] || { echo "::error::/app/bots is empty — the overlay did not land"; exit 1; }
           [ "$GOT" = "$WANT" ] || { echo "::error::/app/bots is not this repo's bot set"; exit 1; }
-          # Asserted on the IMAGE, not only on deploy/bots/ — the artifact that
-          # is pushed and deployed is the one that has to be right, and the
-          # connector is the property that decides whether a turn can run at all.
+          # Asserted on the IMAGE, not only on deploy/bots/ — the connector is
+          # the property that decides whether a turn can run at all, and a
+          # source-tree check cannot see what the build actually baked.
+          # NB "the image" here is the BUILT image BEFORE it is pushed: this
+          # runs against the `push_image: "false"` call's locally-loaded
+          # export. Nothing ties it to the pushed artifact — see the `pull`
+          # comment on the push call, which is the honest statement of that
+          # gap. An earlier draft of this comment said the asserted image is
+          # "the artifact that is pushed and deployed", which erased exactly
+          # that caveat one screen above the place it is made.
           for bot in $WANT; do
             docker run --rm --entrypoint sh "$IMG" \
               -c "test -f /app/bots/$bot/CLAUDE.md && test -s /app/bots/$bot/CLAUDE.md" \

@@ -46,6 +46,13 @@ input, because the workflow pins a muninn ref and **that ref must contain
 #486**. Public muninn carries no tags, so the first deploy pins a commit SHA;
 any SHA at or after `21b436b` has it.
 
+⚠️ **Pass the FULL 40 characters.** The deploy workflow's ref guard accepts a
+tag that really exists upstream, or a 40-hex commit SHA, and nothing else — an
+abbreviated one is refused with *"neither a tag … nor a full 40-character
+commit SHA"*. `21b436b` is written short here because that is how a commit is
+named in prose; the dispatchable value is
+`21b436be9b66f8614bb84ef8f4352b6416f8d99c`.
+
 The alternative — `kubectl debug` onto an image carrying `postgresql-client` —
 was rejected because it needs a psql image in an allowed registry AND the
 transport of `db/init.sql` into it, and it leaves muninn's own printed remedy

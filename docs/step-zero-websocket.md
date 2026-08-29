@@ -54,6 +54,31 @@ look available here and neither is:
   echo, which means an image in an allowed registry — a one-off build pushed to
   the team GAR, or a third-party image mirrored there. That is a real cost.
 
+**Both artifacts are in this repo — you do not have to write them.**
+
+| What | Where |
+|---|---|
+| The echo server + its Dockerfile | `build/echo/` — build and push it BY HAND, per that Dockerfile's header. Not through the deploy workflow, which builds muninn and refuses to run while `vars-q2.json` holds a `REPLACE_ME`. |
+| The stub `Application` | `nais/step-zero/stub.yaml` + `nais/step-zero/vars-step-zero.json` — eight values, all of them already needed for §1–§4, plus the pushed echo image reference. |
+
+Applied with `nais/deploy` directly, e.g.
+
+```bash
+# from a checkout, with the deploy identity already authenticated (§9)
+RESOURCE=nais/step-zero/stub.yaml VARS=nais/step-zero/vars-step-zero.json \
+  CLUSTER=dev-gcp nais/deploy
+```
+
+The five values `stub.yaml` shares with `../app.yaml` — `app_name`,
+`namespace`, `team`, `tenant`, `group_muninn_bruker` and both ingresses — must
+be **identical in both vars files**, or step zero proves the upgrade for a
+different app than the one that is deployed. Nothing checks that for you: they
+are separate files precisely so step zero need not wait on `gcp_project` and
+`vertex_region`, and the cost of that is a copy nobody compares.
+
+The stub is **replaced** by the first real deploy — same `app_name`, so it is
+an update rather than a second Application.
+
 And the stub must carry the **same `app_name` as the real app**: nais provisions
 one Entra application registration per `Application`, so a differently-named stub
 needs its own registration and its own admin consent — the slowest procurement

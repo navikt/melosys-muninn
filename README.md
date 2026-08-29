@@ -17,6 +17,9 @@ patched Dockerfile and no vendored source.
 | `nais/vars-q2.json` | The values. Ships full of `REPLACE_ME_` — see `docs/PREREQUISITES.md`. |
 | `bots/melosys/` | The bot: persona, `config.json`, an empty `.mcp.json`. Copied into `bots/` in the build context. |
 | `.github/workflows/deploy.yml` | Check out muninn at a pinned ref → resolve it to a SHA → assign the Vertex base URL → overlay → build → assert → push → deploy. |
+| `nais/step-zero/` | The stub `Application` and its own vars file, for proving the WebSocket upgrade **before** buying Cloud SQL and the GCP project. Applied by hand with `nais/deploy`, deliberately outside the workflow above. |
+| `build/echo/` | The WebSocket echo image step zero deploys. Built and pushed by hand; it has nothing to do with the muninn build. |
+| `CODEOWNERS` | The team, on everything. This repo is public and takes outside pull requests. |
 | `docs/` | The prerequisites, the schema runbook, step zero, why the bot folder looks the way it does, and every form of the pipeline's guards that was wrong. |
 
 ## The overlay, and the two things that make it land

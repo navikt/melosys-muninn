@@ -1,0 +1,16 @@
+{
+  "_comment": "Step zero only — see docs/step-zero-websocket.md. A SUBSET of vars-q2.json: the five values the stub needs, and nothing procurement-gated. Deliberately a separate file rather than reusing vars-q2.json, because that one still carries REPLACE_ME_gcp_project_id and REPLACE_ME_vertex_region at this point in the schedule, and there is no reason step zero should wait on a GCP project it does not dial. Fill these five from the SAME source as vars-q2.json — app_name, namespace, team, tenant, group and the two ingresses must be IDENTICAL in both files, or the stub proves the upgrade for a different app than the one that gets deployed.",
+
+  "app_name": "melosys-muninn-q2",
+  "namespace": "REPLACE_ME_namespace",
+  "team": "REPLACE_ME_team",
+
+  "ingress_intern": "REPLACE_ME_https_ingress_intern_url",
+  "ingress_ansatt": "REPLACE_ME_https_ingress_ansatt_url",
+
+  "tenant": "REPLACE_ME_entra_tenant",
+  "group_muninn_bruker": "REPLACE_ME_group_object_id",
+
+  "_comment_echo_image": "The full pushed reference of the echo image, built from build/echo/. e.g. europe-north1-docker.pkg.dev/nais-management-233d/<team>/melosys-muninn-echo:<tag>. It must live in an allowed registry — the team GAR, or a third-party image mirrored there.",
+  "echo_image": "REPLACE_ME_echo_image_reference"
+}

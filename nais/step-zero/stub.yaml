@@ -1,0 +1,94 @@
+# Step zero's stub Application — see docs/step-zero-websocket.md.
+#
+# WHAT THIS IS FOR: proving that a WebSocket upgrade survives the dev-gcp
+# ingress controller AND the wonderwall sidecar, before the org buys Cloud SQL,
+# the GCP project or Vertex quota. It is applied by hand with `nais/deploy`,
+# OUTSIDE .github/workflows/deploy.yml — that workflow refuses to run while any
+# REPLACE_ME survives in vars-q2.json, and `gcp_project` and `vertex_region`
+# are still placeholders at this point in the schedule. That refusal is correct;
+# this file is how step zero happens anyway.
+#
+# THREE THINGS ARE COPIED VERBATIM FROM ../app.yaml AND MUST STAY THAT WAY,
+# because they are the things under test:
+#   - `metadata.name` — the SAME app_name as the real app. nais provisions one
+#     Entra application registration per Application, so a differently-named
+#     stub needs its own registration and its own admin consent, the slowest
+#     procurement item, done twice. Two Applications also cannot both claim one
+#     ingress host. The first real deploy REPLACES this one.
+#   - the whole `azure:` block — tenant, allowAllUsers:false, the group, and
+#     `sidecar.autoLogin: true`. autoLogin is what refuses an unauthenticated
+#     upgrade AT THE SIDECAR, which is precisely the leg being proven.
+#   - both ingresses. The check is run from BOTH domains; an ingress class can
+#     differ between them.
+#
+# WHAT IS DELIBERATELY ABSENT: gcp.sqlInstances, gcp.permissions,
+# accessPolicy, envFrom, and every muninn env var. None of them is needed to
+# carry an upgrade, and each one is a procurement item this whole exercise
+# exists to defer. `texas.nais.io/enabled` is absent too: the stub has no
+# MUNINN_AUTH boot assert to satisfy, and the sidecar's own login does not
+# depend on it.
+apiVersion: nais.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ app_name }}
+  namespace: {{ namespace }}
+  labels:
+    team: {{ team }}
+spec:
+  # The echo image, NOT this repo's muninn image and NOT a hello-world.
+  # A plain HTTP server answers an upgrade request as an ordinary request —
+  # which is one of the failure signatures step zero is looking for, so a
+  # hello-world stub reports the very failure it is meant to detect. And the
+  # muninn image cannot serve here either: its entrypoint runs under `set -eu`
+  # and calls `bun db/require-provisioned.ts` BEFORE the server starts, so an
+  # unprovisioned pod exits rather than degrading.
+  # Build and push it with build/echo/ — see that Dockerfile's header.
+  image: {{ echo_image }}
+
+  # Must match the PORT the echo server binds (build/echo/server.ts reads
+  # $PORT and defaults to this). The probes are on the app port and carry no
+  # credential, which is why they are in autoLoginIgnorePaths below.
+  port: 3000
+
+  replicas:
+    min: 1
+    max: 1
+
+  liveness:
+    path: /api/live
+    initialDelay: 5
+    timeout: 5
+  readiness:
+    path: /api/live
+    initialDelay: 5
+    timeout: 5
+
+  # VERBATIM from ../app.yaml. This is the leg under test.
+  azure:
+    application:
+      enabled: true
+      tenant: {{ tenant }}
+      allowAllUsers: false
+      claims:
+        extra:
+          - NAVident
+        groups:
+          - id: {{ group_muninn_bruker }}
+    sidecar:
+      enabled: true
+      autoLogin: true
+      autoLoginIgnorePaths:
+        - /api/live
+        - /favicon.svg
+        - /favicon.ico
+
+  resources:
+    limits:
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+  ingresses:
+    - {{ ingress_intern }}
+    - {{ ingress_ansatt }}

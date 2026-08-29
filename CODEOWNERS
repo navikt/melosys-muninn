@@ -1,0 +1,19 @@
+# Every file in this repo, to the team. A public navikt repo takes pull
+# requests from outside the team, and without a catch-all rule GitHub asks
+# nobody to look at them.
+*   @navikt/teammelosys
+
+# The three surfaces where an unreviewed change is not merely wrong but
+# outward-facing or silent. They resolve to the same team today — the point is
+# that the rule survives a future narrowing of the catch-all above.
+#
+#   - the pipeline builds from a PINNED ref of a repo this org does not own,
+#     and its guards are the only thing standing between a dispatch and a pod
+#     serving colleague chat (see docs/pipeline-guards.md);
+#   - the manifest carries the access gate: allowAllUsers:false + claims.groups
+#     is the ONLY thing keeping a pod holding personopplysninger to its group;
+#   - the bot folder decides which model every turn is sent to, and its
+#     CLAUDE.md is a public promise about what this bot can and cannot see.
+/.github/workflows/   @navikt/teammelosys
+/nais/                @navikt/teammelosys
+/bots/                @navikt/teammelosys
