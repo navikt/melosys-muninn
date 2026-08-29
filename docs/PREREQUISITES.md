@@ -274,6 +274,13 @@ Two things still have to exist outside this repo.
 - **`MUNINN_REPO`** — the `owner/repo` slug of PUBLIC muninn. It is still a
   placeholder, and the workflow refuses on it before it queries anything.
 
+  The dispatch input accepts **a tag that exists upstream, or a full
+  40-character commit SHA** — checked positively against the remote's ref list,
+  so a branch, a `refs/heads/…` spelling, a glob and a short SHA are all
+  refused. Measured 2026-08-29: public muninn carries **no tags at all**, so
+  until someone tags it, a full commit SHA is the only value the first deploy
+  can be given.
+
 Two properties of that pipeline worth knowing before someone "simplifies" them:
 
 1. **The image is asserted BEFORE it is pushed.** The action is called twice —
@@ -281,10 +288,14 @@ Two properties of that pipeline worth knowing before someone "simplifies" them:
    image into the runner's daemon for three assertion steps (the bot set, the
    absent CLI and ffmpeg, the embedding weights), and once to push from the
    shared cache. A bad image therefore never reaches GAR. The two calls repeat
-   `team`, `docker_context`, `build_args` and `tag` verbatim — that identity is
-   the only thing tying the asserted image to the pushed one — and differ in
-   exactly one input on purpose, `pull`, which the push call turns off so a
-   base image republished between them cannot substitute an uninspected build.
+   `team`, `docker_context`, `build_args`, `tag` and `salsa` verbatim — that
+   identity is the only thing tying the asserted image to the pushed one — and
+   differ in exactly three inputs, all deliberate: `push_image`, `outputs`, and
+   `pull`, which the push call turns off so a base image republished between
+   them cannot substitute an uninspected build. That last one **narrows the
+   window rather than closing it**, and nothing in the pipeline can detect it
+   regressing; the shape that would close it is the fallback third job, which
+   pulls the pushed image and re-runs the assertions against it.
 2. **A deploy names the muninn commit it shipped.** The dispatched ref is
    resolved to a SHA right after the checkout, and that SHA becomes both a GAR
    tag (`muninn-<sha>`) and the pod's `MUNINN_REF`. The deployed `Application`'s
@@ -346,9 +357,9 @@ file half of this change (`admin_oids` gone, `envFrom` in).
   v1 at dev.
 
   **Two stores, and the manifest is what makes that true.** muninn's file sink
-  defaults to a daily-rotating JSONL under `./logs` with 7-day retention, so
-  without `LOG_DIR=none` there would be a THIRD copy on the container
-  filesystem — unbounded on a pod with no volume, and carrying message previews
+  defaults to a daily-rotating JSONL under `./logs`, so without `LOG_DIR=none`
+  there would be a THIRD copy on the container filesystem — bounded only by its
+  own 7-day rotation, on a pod with no volume, and carrying message previews
   from the handlers the `nais` profile's `info`→`debug` demotion does not cover
   (it demotes `src/core/message-processor.ts` only; the Slack, voice and
   response handlers log previews of their own). `nais/app.yaml` sets it. Nothing

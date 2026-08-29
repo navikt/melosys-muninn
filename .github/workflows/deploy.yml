@@ -13,6 +13,10 @@ name: deploy
 # SHA everywhere: a tag can be moved upstream, so "redeploy tag X" is only
 # reproducible if the artifacts carry the commit the tag pointed at.
 #
+# NB measured 2026-08-29: public muninn carries NO TAGS AT ALL, so until it
+# does, the only dispatchable value is a full 40-character commit SHA. That is
+# not a defect in this guard — it is what the first deploy will need to know.
+#
 # `workflow_dispatch` ONLY. A pull request from a fork therefore can never run
 # this and never sees a secret. Do not add a `pull_request` trigger without
 # re-reading that sentence.
@@ -21,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       muninn_ref:
-        description: "Tag or commit SHA in the public muninn repo to build (not a branch)"
+        description: "A tag, or a FULL 40-character commit SHA, in the public muninn repo (never a branch, never a short SHA)"
         required: true
       cluster:
         description: "nais cluster"
@@ -63,37 +67,55 @@ jobs:
       # guess. Ask the remote rather than testing two literal strings: a guard
       # that only knows `main` and `master` waves `feature/x` straight through.
       #
-      # Three details, and all three are load-bearing. `MUNINN_REPO` is an
-      # `owner/repo` slug (it is fed to actions/checkout's `repository:`), so it
-      # is not a valid remote on its own — hence the URL. The EXIT STATUS is
-      # checked separately from the output: "returns empty" is also satisfied by
-      # a command that errored, which would wave every branch through. And the
-      # pattern is ANCHORED as `refs/heads/$REF`: `git ls-remote` matches
-      # patterns from the RIGHT on `/` boundaries, so the bare `$REF` form
-      # reports the legitimate TAG `x` as a branch whenever any `feature/x`
-      # exists upstream — fail-closed, but with an error message that is simply
-      # untrue, sending the operator to look for a branch that does not exist.
-      # Measured against a purpose-built remote carrying `refs/heads/main`,
-      # `refs/heads/feature/x`, `refs/tags/v1` and `refs/tags/x`:
+      # A branch makes the image unreproducible and the rollback story a guess.
+      # This is a POSITIVE check — only a TAG that exists upstream or a full
+      # 40-character commit SHA passes — after two rounds of trying to prove the
+      # negative, both of which shipped a hole:
       #
-      #   pattern "$REF"              x -> refs/heads/feature/x   (refused, WRONG)
-      #   pattern "refs/heads/$REF"   x -> <empty>                (allowed, right)
-      #                       feature/x -> refs/heads/feature/x   (refused, right)
-      #                            main -> refs/heads/main        (refused, right)
+      #   `[ "$REF" = main ] || [ "$REF" = master ]`   waved `feature/x` through.
+      #   `git ls-remote --heads URL "$REF"`           patterns match from the
+      #       RIGHT on `/` boundaries, so the legitimate TAG `x` was reported as
+      #       a branch whenever any `feature/x` existed, and a glob like `*` was
+      #       a pattern rather than a name.
+      #   `git ls-remote --heads URL "refs/heads/$REF"` anchored that, and in
+      #       doing so waved `refs/heads/main` through — which
+      #       `actions/checkout` accepts and resolves to the branch tip.
       #
-      # `$REF` is read through `env:` rather than interpolated into the script
-      # body — a `${{ inputs.* }}` inside `run:` is a script-injection surface,
-      # bounded here by who may workflow_dispatch, but free to close.
-      - name: The ref must not be a branch
+      # So: fetch the ref list ONCE and compare EXACT FIELDS with awk. No glob
+      # semantics, no shell pattern, no locale. The shape test runs through `jq`
+      # for the same reason the vars check does — see that step.
+      #
+      # Both arms are load-bearing, and both were mutation-checked: deleting the
+      # is-a-branch arm lets a name that is BOTH a tag and a branch through
+      # (`actions/checkout`'s resolution is then ambiguous), and the positive arm
+      # is what refuses `main`, `refs/heads/main`, a glob, and a SHORT sha —
+      # short shas are refused deliberately: `actions/checkout` cannot fetch one
+      # reliably, and "redeploy X" has to name one object.
+      #
+      # The EXIT STATUS is still checked separately from the output: "returns
+      # empty" is also satisfied by a command that errored, which would wave
+      # every branch through. `MUNINN_REPO` is an `owner/repo` slug (it is fed
+      # to actions/checkout's `repository:`), so it is not a valid remote on its
+      # own — hence the URL. And `$REF` is read through `env:` rather than
+      # interpolated into the `run:` body.
+      - name: The ref must be a tag or a full commit SHA, never a branch
         env:
           REF: ${{ inputs.muninn_ref }}
         run: |
-          if ! out=$(git ls-remote --heads "https://github.com/$MUNINN_REPO" "refs/heads/$REF"); then
-            echo "::error::could not query $MUNINN_REPO for branches — cannot prove '$REF' is not one"; exit 1
+          KIND=$(printf %s "$REF" | jq -Rsr 'if test("\\A[0-9a-f]{40}\\z") then "sha" else "other" end')
+          if ! refs=$(git ls-remote --refs "https://github.com/$MUNINN_REPO"); then
+            echo "::error::could not query $MUNINN_REPO for refs — cannot verify '$REF'"; exit 1
           fi
-          if [ -n "$out" ]; then
-            echo "::error::'$REF' is a BRANCH in $MUNINN_REPO — pass a tag or a commit SHA"; exit 1
+          if printf '%s\n' "$refs" | awk -v w="refs/heads/$REF" '$2==w{f=1} END{exit !f}'; then
+            echo "::error::'$REF' is a BRANCH in $MUNINN_REPO — pass a tag or a full commit SHA"; exit 1
           fi
+          if [ "$KIND" = "sha" ]; then
+            echo "ref is a commit SHA"; exit 0
+          fi
+          if printf '%s\n' "$refs" | awk -v w="refs/tags/$REF" '$2==w{f=1} END{exit !f}'; then
+            echo "ref is the tag $REF"; exit 0
+          fi
+          echo "::error::'$REF' is neither a tag in $MUNINN_REPO nor a full 40-character commit SHA"; exit 1
 
       - name: Check out public muninn at the pinned ref
         uses: actions/checkout@v4
@@ -160,39 +182,52 @@ jobs:
       # nais/deploy, so no one maintains it either.
       - name: Derive the Vertex base URL, assign it into the bot folder
         run: |
-          PROJECT=$(jq -r '.gcp_project // ""' deploy/nais/vars-q2.json)
-          REGION=$(jq -r '.vertex_region // ""' deploy/nais/vars-q2.json)
-          TEAM=$(jq -r '.team // ""' deploy/nais/vars-q2.json)
           # These three leave this step by three routes that all trust their
           # shape: a URL, a `$GITHUB_ENV` line, and the comma-separated `VAR:`
-          # input on the deploy. So validate the SHAPE once, here, rather than
-          # guarding each route:
-          #   - a NEWLINE in any of them writes a second `$GITHUB_ENV` line,
-          #     which is either an "Invalid format" failure on a value that
-          #     looks fine in the JSON, or an arbitrary env var set for every
-          #     later step including both action calls;
-          #   - a COMMA silently splits the single `VAR:` line into a bogus
-          #     third variable and truncates `vertex_host`;
-          #   - anything outside this set is not a legal team slug, GCP project
-          #     id or Vertex location anyway. muninn refuses a region that is
-          #     not `^[a-z0-9-]+$` at boot, for the same reason: it becomes a
-          #     hostname label.
-          # The set is ENUMERATED rather than written `[!a-z0-9-]`, and that is
-          # not style. `a-z` in a shell pattern is a COLLATION range, not an
-          # ASCII one: measured, `case "My-Project" in *[!a-z0-9-]*)` REFUSES
-          # under LC_ALL=C and C.UTF-8 and ACCEPTS under en_US.UTF-8. A guard
-          # whose answer depends on the runner's locale is not a guard.
-          SAFE='abcdefghijklmnopqrstuvwxyz0123456789-'
-          for pair in "gcp_project=$PROJECT" "vertex_region=$REGION" "team=$TEAM"; do
-            key=${pair%%=*}
-            val=${pair#*=}
-            if [ -z "$val" ]; then
-              echo "::error::$key is missing from vars-q2.json"; exit 1
-            fi
-            if [ -n "$(printf %s "$val" | tr -d "$SAFE")" ] || [ "${val#-}" != "$val" ]; then
-              echo "::error::$key is '$val' — expected lowercase letters, digits and hyphens only"; exit 1
-            fi
-          done
+          # input on the deploy. A NEWLINE writes a second `$GITHUB_ENV` line
+          # (an arbitrary variable set for every later step, or an obscure
+          # "Invalid format" failure attributed elsewhere); a COMMA splits the
+          # single `VAR:` line and truncates `vertex_host`; anything else is not
+          # a legal team slug, GCP project id or Vertex location anyway.
+          #
+          # The check is in `jq`, and the VALUES NEVER CROSS INTO THE SHELL —
+          # only the names of the offending keys do. That is the mechanism, not
+          # a style preference, and it is the third attempt at this guard:
+          #
+          #   `grep REPLACE_ME <file>` also read the `_comment` keys, so it
+          #       refused a correctly filled file forever.
+          #   `case "$val" in *[!a-z0-9-]*)` is a COLLATION range, ASCII only
+          #       where bash's `globasciiranges` is on (it is, on bash >= 5, so
+          #       this was sound on the runner and unsound on older shells).
+          #   `[ -n "$(printf %s "$val" | tr -d "$SAFE")" ]` — command
+          #       substitution strips TRAILING NEWLINES, so a value whose only
+          #       illegal characters were newlines passed. Measured: with
+          #       `vertex_region` set to "eu\nrogue" the step exited 0, wrote a
+          #       two-line VERTEX_HOST and baked a broken baseUrl into the bot.
+          #
+          # `\A` and `\z`, not `^` and `$`: measured in jq, `test("^[a-z0-9-]+$")`
+          # ACCEPTS "eu\n" — Oniguruma's `$` matches before a trailing newline.
+          # Reverting the anchors is detectable; that mutation was checked.
+          #
+          # The `== "null"` arm preserves a property the shell version had: a
+          # missing key can never be mistaken for a value, however it arrives.
+          BAD=$(jq -r '
+            . as $doc
+            | ["gcp_project", "vertex_region", "team"]
+            | map(select(
+                ($doc[.] | type) != "string"
+                or $doc[.] == "null"
+                or ($doc[.] | test("\\A[a-z0-9]([a-z0-9-]*[a-z0-9])?\\z") | not)
+              ))
+            | join(", ")
+          ' deploy/nais/vars-q2.json)
+          if [ -n "$BAD" ]; then
+            echo "::error::not a usable value in vars-q2.json: $BAD — expected lowercase letters, digits and inner hyphens only"; exit 1
+          fi
+
+          PROJECT=$(jq -r '.gcp_project' deploy/nais/vars-q2.json)
+          REGION=$(jq -r '.vertex_region' deploy/nais/vars-q2.json)
+          TEAM=$(jq -r '.team' deploy/nais/vars-q2.json)
 
           # muninn refuses `global` at boot in either Vertex variable name, and
           # again on the URL itself — the region routes to whichever region has
@@ -243,6 +278,12 @@ jobs:
       # nothing to catch.
       - name: No placeholder survives in the bot folder
         run: |
+          # The directory test is not belt-and-braces. `grep -r` on a missing
+          # path exits 2, which makes the `if` FALSE — so the backstop passed
+          # precisely when the thing it guards was absent. Observed live.
+          if [ ! -d deploy/bots ]; then
+            echo "::error::deploy/bots is missing — there is no bot folder to overlay"; exit 1
+          fi
           if grep -rn "REPLACE_ME" deploy/bots/; then
             echo "::error::a placeholder survives in the bot folder"; exit 1
           fi
@@ -317,6 +358,7 @@ jobs:
             WITH_EMBEDDINGS=true
           push_image: "false"
           outputs: type=docker
+          salsa: true
 
       # Acceptance D1. The bot check asserts the EXACT SET, not "contains": too
       # few is a CrashLoopBackOff (discoverAllBots exits 1 on zero folders), and
@@ -371,14 +413,25 @@ jobs:
       # sharing nothing with the one that passed. Digest equality cannot be the
       # backstop: a type=docker export and a pushed OCI image are different
       # artifacts. The push reuses the shared type=gha cache, so this is fast.
-      # `pull: false`, and it is the one input that DIFFERS between the calls on
-      # purpose. The action defaults it to "true", which passes `--pull` to
+      # `team`, `docker_context`, `build_args`, `tag` and `salsa` are IDENTICAL
+      # to the assert call. The calls differ in exactly three inputs, all three
+      # deliberate: `push_image`, `outputs`, and `pull`.
+      #
+      # `pull: "false"` is the one that is about correctness rather than about
+      # pushing. The action defaults it to "true", which passes `--pull` to
       # buildx: if the base image tag (`oven/bun:1-debian`) is republished in
       # the minutes between the two calls, the push call resolves a different
       # digest, every layer cache key changes, the whole chain rebuilds — and an
       # image no `docker run` ever inspected is pushed and deployed, silently.
-      # The base is already in the builder's cache from the assert call, so
-      # there is nothing to re-pull.
+      #
+      # ⚠️ It NARROWS that window; it does not close it, and NOTHING HERE CAN
+      # DETECT IT REGRESSING. There is no assertion tying the pushed artifact to
+      # the asserted one — digest equality cannot serve, since a type=docker
+      # export and a pushed OCI image are different artifacts — so deleting this
+      # line reproduces the defect with every step green. The shape that would
+      # close it is the documented fallback: a third job that pulls the pushed
+      # image and re-runs the assertions against it. Recorded rather than
+      # pretended, like the `outputs: type=docker` note above.
       - name: Push the asserted image to GAR
         id: docker-push
         uses: nais/docker-build-push@v0
