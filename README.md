@@ -17,7 +17,7 @@ patched Dockerfile and no vendored source.
 | `nais/vars-q2.json` | The values. Ships full of `REPLACE_ME_` — see `docs/PREREQUISITES.md`. |
 | `bots/melosys/` | The bot: persona, `config.json`, an empty `.mcp.json`. Copied into `bots/` in the build context. |
 | `.github/workflows/deploy.yml` | Check out muninn at a pinned ref → resolve it to a SHA → assign the Vertex base URL → overlay → build → assert → push → deploy. |
-| `docs/` | The prerequisites, the schema runbook, step zero, and why the bot folder looks the way it does. |
+| `docs/` | The prerequisites, the schema runbook, step zero, why the bot folder looks the way it does, and every form of the pipeline's guards that was wrong. |
 
 ## The overlay, and the two things that make it land
 

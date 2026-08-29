@@ -63,37 +63,14 @@ jobs:
             REPLACE_ME*|"") echo "::error::MUNINN_REPO is still a placeholder — see docs/PREREQUISITES.md §9"; exit 1 ;;
           esac
 
-      # A branch makes the image unreproducible and the rollback story a guess.
-      # This is a POSITIVE check — only a TAG that exists upstream, or a
-      # 40-character commit SHA, passes. It arrived that way after THREE shipped
-      # attempts to prove the negative, each of which had a hole:
-      #
-      #   `[ "$REF" = main ] || [ "$REF" = master ]`   waved `feature/x` through.
-      #   `git ls-remote --heads URL "$REF"`           patterns match from the
-      #       RIGHT on `/` boundaries, so the legitimate TAG `x` was reported as
-      #       a branch whenever any `feature/x` existed, and a glob like `*` was
-      #       a pattern rather than a name.
-      #   `git ls-remote --heads URL "refs/heads/$REF"` anchored that, and in
-      #       doing so waved `refs/heads/main` through — which
-      #       `actions/checkout` accepts and resolves to the branch tip.
-      #
-      # So: fetch the ref list ONCE and compare EXACT FIELDS with awk. No glob
-      # semantics, no shell pattern, no locale. The shape test runs through `jq`
-      # for the same reason the vars check does — see that step.
-      #
-      # Both arms are load-bearing, and both were mutation-checked: deleting the
-      # is-a-branch arm lets a name that is BOTH a tag and a branch through
-      # (`actions/checkout`'s resolution is then ambiguous), and the positive arm
-      # is what refuses `main`, `refs/heads/main`, a glob, and a SHORT sha —
-      # short shas are refused deliberately: `actions/checkout` cannot fetch one
-      # reliably, and "redeploy X" has to name one object.
-      #
-      # The EXIT STATUS is still checked separately from the output: "returns
-      # empty" is also satisfied by a command that errored, which would wave
-      # every branch through. `MUNINN_REPO` is an `owner/repo` slug (it is fed
-      # to actions/checkout's `repository:`), so it is not a valid remote on its
-      # own — hence the URL. And `$REF` is read through `env:` rather than
-      # interpolated into the `run:` body.
+      # POSITIVE: only a tag that really exists upstream, or a 40-hex commit
+      # SHA (either case — git and actions/checkout both accept upper), passes.
+      # Fetch the ref list ONCE and compare EXACT FIELDS through ENVIRON: every
+      # pattern-based form of this guard has had a hole, and `awk -v` expands
+      # escapes in the value. The exit status is checked separately from the
+      # output — "returns empty" is also satisfied by a command that errored.
+      # `$REF` is read through `env:`, never interpolated into the body.
+      # Three earlier forms and why each failed: docs/pipeline-guards.md.
       - name: The ref must be a tag or a full commit SHA, never a branch
         env:
           REF: ${{ inputs.muninn_ref }}
@@ -189,46 +166,22 @@ jobs:
         run: |
           # These three leave this step by three routes that all trust their
           # shape: a URL, a `$GITHUB_ENV` line, and the comma-separated `VAR:`
-          # input on the deploy. A NEWLINE writes a second `$GITHUB_ENV` line
-          # (an arbitrary variable set for every later step, or an obscure
-          # "Invalid format" failure attributed elsewhere); a COMMA splits the
-          # single `VAR:` line and truncates `vertex_host`; anything else is not
-          # a legal team slug, GCP project id or Vertex location anyway.
+          # input on the deploy. A NEWLINE writes a second `$GITHUB_ENV` line; a
+          # COMMA splits the `VAR:` line and truncates `vertex_host`.
           #
-          # The check is in `jq`, and the VALUES NEVER CROSS INTO THE SHELL —
-          # only the names of the offending keys do. That is the mechanism, not
-          # a style preference. This guard has shipped in two forms; the first
-          # had a hole:
+          # The check is in `jq` and the VALUES NEVER CROSS INTO THE SHELL —
+          # only the names of offending keys do. That is the mechanism, not a
+          # style preference. Earlier forms and why each failed:
+          # docs/pipeline-guards.md.
           #
-          #   `[ -n "$(printf %s "$val" | tr -d "$SAFE")" ]` — command
-          #       substitution strips TRAILING NEWLINES, so a value whose only
-          #       illegal characters were newlines passed. Measured: with
-          #       `vertex_region` set to "eu\nrogue" the step exited 0, wrote a
-          #       two-line VERTEX_HOST and baked a broken baseUrl into the bot.
-          #
-          # (A `case "$val" in *[!a-z0-9-]*)` form was written and discarded
-          # before it was committed — bracket ranges are COLLATION ranges, ASCII
-          # only where bash's `globasciiranges` is on. It is noted because the
-          # obvious spelling is the one that looks right. The `REPLACE_ME` grep
-          # in the step ABOVE is a different guard and is still live: it asks
-          # whether a value was filled in, not whether it is usable.)
-          #
-          # `\A` and `\z`, not `^` and `$`: measured in jq, `test("^[a-z0-9-]+$")`
-          # ACCEPTS "eu\n" — Oniguruma's `$` matches before a trailing newline.
-          # Reverting the anchors is detectable; that mutation was checked.
-          #
-          # The `== "null"` arm preserves a property the shell version had: a
-          # missing key can never be mistaken for a value, however it arrives.
-          # FIRST, and it is the arm round 2 dropped. jq given an EMPTY (or
-          # whitespace-only) document runs the program zero times, emits
-          # nothing and exits 0 — so `BAD` came back empty and the step passed,
-          # deriving `https://aiplatform..rep.googleapis.com/v1/projects//…` and
-          # baking it into the shipped bot config, with `TEAM=` written to
-          # $GITHUB_ENV. Measured. Every other malformed shape already died
-          # under `-e` (a JSON array or scalar -> rc 5, a parse error -> rc 5, a
-          # missing file -> rc 2); zero output was the one that slipped.
-          jq -e 'type == "object"' deploy/nais/vars-q2.json > /dev/null || {
-            echo "::error::vars-q2.json is empty, unreadable, or not a JSON object"; exit 1
+          # `-s`, and `length == 1`: without slurping, a CONCATENATED JSON
+          # STREAM ({...}{...} — a merge conflict resolved by keeping both
+          # sides) runs the program once per document, `-e` judges only the
+          # last, and each document is individually clean. `jq -r '.team'` then
+          # returns a MULTI-LINE value and the newline this guard exists to
+          # refuse walks straight through. Measured.
+          jq -e -s 'length == 1 and (.[0] | type == "object")' deploy/nais/vars-q2.json > /dev/null || {
+            echo "::error::vars-q2.json is not exactly one JSON object (empty, unreadable, malformed, or two documents concatenated)"; exit 1
           }
 
           BAD=$(jq -r '
@@ -275,10 +228,21 @@ jobs:
 
           # `deploy/bots/`, NOT `muninn/bots/`: this is the copy the backstop
           # grep below reads and the copy the overlay step copies FROM.
+          # `set -e` is EXEMPT for the non-final command of an `&&` list, and
+          # the loop body's last command is the `echo` — so an unmatched glob
+          # ran the body once on the literal pattern, failed the redirect, and
+          # exited 0 having assigned nothing. Measured. Count instead.
+          assigned=0
           for f in deploy/bots/*/config.json; do
-            jq --arg u "$BASE_URL" '.baseUrl = $u' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+            [ -f "$f" ] || continue
+            jq --arg u "$BASE_URL" '.baseUrl = $u' "$f" > "$f.tmp"
+            mv "$f.tmp" "$f"
+            assigned=$((assigned + 1))
             echo "assigned baseUrl in $f"
           done
+          if [ "$assigned" -eq 0 ]; then
+            echo "::error::no deploy/bots/*/config.json to assign a baseUrl into"; exit 1
+          fi
 
           # A step cannot hand a value to a later step's `env:` any other way,
           # and there is exactly ONE `VAR:` line on the deploy — see the comment
@@ -304,13 +268,25 @@ jobs:
           if [ ! -d deploy/bots ]; then
             echo "::error::deploy/bots is missing — there is no bot folder to overlay"; exit 1
           fi
-          # An EMPTY deploy/bots also passes a bare grep, which is the
-          # "matched nothing" case this step claims to catch. Two later steps
-          # would catch it (the assign's glob, the exact-set assertion), but
-          # both are outside this step and the claim has to be true here.
-          set -- deploy/bots/*/config.json
-          if [ ! -e "$1" ]; then
-            echo "::error::deploy/bots has no <bot>/config.json — nothing to overlay"; exit 1
+          # An EMPTY deploy/bots passes a bare grep too — the "matched nothing"
+          # case. Assert the invariant this POD needs, per bot folder:
+          #
+          #   CLAUDE.md   — muninn discovers a bot by this file and nothing else
+          #                 (discoverAllBots), and exits 1 on zero bots.
+          #   config.json — OPTIONAL in muninn generally, REQUIRED here:
+          #                 `resolveConnector` falls back to `claude-cli` when a
+          #                 bot names no connector, and this image is built
+          #                 WITH_CLI=false. An unpinned bot spawns a missing
+          #                 binary on every turn. See docs/bot-folder-notes.md.
+          found=0
+          for d in deploy/bots/*/; do
+            [ -d "$d" ] || continue
+            found=$((found + 1))
+            [ -s "$d/CLAUDE.md" ] || { echo "::error::${d} has no CLAUDE.md — muninn would not discover it"; exit 1; }
+            [ -f "$d/config.json" ] || { echo "::error::${d} has no config.json — an unpinned bot falls back to claude-cli, which this image does not carry"; exit 1; }
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::deploy/bots contains no bot folder"; exit 1
           fi
           if grep -rn "REPLACE_ME" deploy/bots/; then
             echo "::error::a placeholder survives in the bot folder"; exit 1
