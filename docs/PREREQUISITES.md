@@ -16,11 +16,12 @@ than a value.
 *Values*: the infrastructure names — namespace, team, ingresses, tenant, project,
 region — are public by the hundred across `navikt`, and the one value that is
 about **people** (the admin `oid` list) has been moved out into a secret (§5,
-§10). *Owners*: recorded as **GitHub team handles**, never as personal names.
-Filling nine owner slots with colleagues' names would publish an internal
+§10). *Owners*: **every** `Owner:` line below is a GitHub team handle, never a
+personal name. Filling them in with colleagues' names would publish an internal
 responsibility map — who owns Entra consent, who owns the admin allowlist, who
 owns Cloud SQL — which is the same disclosure in prose that `admin_oids` was in
-JSON. Keep a personal name in an internal doc if the team wants one.
+JSON. Keep a personal name in an internal doc if the team wants one. There is no
+exempt slot; a count here would only invite one.
 
 ---
 
@@ -276,11 +277,14 @@ Two things still have to exist outside this repo.
 Two properties of that pipeline worth knowing before someone "simplifies" them:
 
 1. **The image is asserted BEFORE it is pushed.** The action is called twice —
-   once with `push_image: false` and `outputs: type=docker`, which loads the
-   image into the runner's daemon for four `docker run` assertions, and once to
-   push from the shared cache. A bad image therefore never reaches GAR. The two
-   calls repeat `team`, `docker_context`, `build_args` and `tag` verbatim: that
-   identity is the only thing tying the asserted image to the pushed one.
+   once with `push_image: "false"` and `outputs: type=docker`, which loads the
+   image into the runner's daemon for three assertion steps (the bot set, the
+   absent CLI and ffmpeg, the embedding weights), and once to push from the
+   shared cache. A bad image therefore never reaches GAR. The two calls repeat
+   `team`, `docker_context`, `build_args` and `tag` verbatim — that identity is
+   the only thing tying the asserted image to the pushed one — and differ in
+   exactly one input on purpose, `pull`, which the push call turns off so a
+   base image republished between them cannot substitute an uninspected build.
 2. **A deploy names the muninn commit it shipped.** The dispatched ref is
    resolved to a SHA right after the checkout, and that SHA becomes both a GAR
    tag (`muninn-<sha>`) and the pod's `MUNINN_REF`. The deployed `Application`'s
@@ -340,3 +344,14 @@ file half of this change (`admin_oids` gone, `envFrom` in).
   the `activity_log` copy is admin-zone by design. Retention is **not** answered
   here and should be before colleagues are invited. This is the item that keeps
   v1 at dev.
+
+  **Two stores, and the manifest is what makes that true.** muninn's file sink
+  defaults to a daily-rotating JSONL under `./logs` with 7-day retention, so
+  without `LOG_DIR=none` there would be a THIRD copy on the container
+  filesystem — unbounded on a pod with no volume, and carrying message previews
+  from the handlers the `nais` profile's `info`→`debug` demotion does not cover
+  (it demotes `src/core/message-processor.ts` only; the Slack, voice and
+  response handlers log previews of their own). `nais/app.yaml` sets it. Nothing
+  is lost: the console sink still goes to the platform's log aggregator, and the
+  `/api/logs*` route group is not registered on this profile anyway, so nothing
+  could read the file.

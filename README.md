@@ -84,8 +84,9 @@ be "redeploy tag X", not "hope main has not moved". Whatever is dispatched is
 resolved to a commit SHA immediately, and that SHA is what the GAR tag
 (`muninn-<sha>`) and the pod's `MUNINN_REF` carry: a tag can be moved upstream.
 
-Before the first deploy, work through **`docs/PREREQUISITES.md`**. It is ten
-items and each one alone makes the pod useless, and the slowest is not engineering work at all: the
+Before the first deploy, work through **`docs/PREREQUISITES.md`**. §1–§10 are
+ten items and each one alone makes the pod useless (§0 is not one of them — it
+is a proof to run before buying the expensive ones), and the slowest is not engineering work at all: the
 Entra app registration with admin consent. The model question is **answered** —
 Gemini 2.5 Flash in `europe-north1` over Vertex's OpenAI-compatible endpoint —
 and what remains of it is which GCP project owns the quota.

@@ -63,11 +63,23 @@ jobs:
       # guess. Ask the remote rather than testing two literal strings: a guard
       # that only knows `main` and `master` waves `feature/x` straight through.
       #
-      # Two details, and both are load-bearing. `MUNINN_REPO` is an `owner/repo`
-      # slug (it is fed to actions/checkout's `repository:`), so it is not a
-      # valid remote on its own — hence the URL. And the EXIT STATUS is checked
-      # separately from the output: "returns empty" is also satisfied by a
-      # command that errored, which would wave every branch through.
+      # Three details, and all three are load-bearing. `MUNINN_REPO` is an
+      # `owner/repo` slug (it is fed to actions/checkout's `repository:`), so it
+      # is not a valid remote on its own — hence the URL. The EXIT STATUS is
+      # checked separately from the output: "returns empty" is also satisfied by
+      # a command that errored, which would wave every branch through. And the
+      # pattern is ANCHORED as `refs/heads/$REF`: `git ls-remote` matches
+      # patterns from the RIGHT on `/` boundaries, so the bare `$REF` form
+      # reports the legitimate TAG `x` as a branch whenever any `feature/x`
+      # exists upstream — fail-closed, but with an error message that is simply
+      # untrue, sending the operator to look for a branch that does not exist.
+      # Measured against a purpose-built remote carrying `refs/heads/main`,
+      # `refs/heads/feature/x`, `refs/tags/v1` and `refs/tags/x`:
+      #
+      #   pattern "$REF"              x -> refs/heads/feature/x   (refused, WRONG)
+      #   pattern "refs/heads/$REF"   x -> <empty>                (allowed, right)
+      #                       feature/x -> refs/heads/feature/x   (refused, right)
+      #                            main -> refs/heads/main        (refused, right)
       #
       # `$REF` is read through `env:` rather than interpolated into the script
       # body — a `${{ inputs.* }}` inside `run:` is a script-injection surface,
@@ -76,7 +88,7 @@ jobs:
         env:
           REF: ${{ inputs.muninn_ref }}
         run: |
-          if ! out=$(git ls-remote --heads "https://github.com/$MUNINN_REPO" "$REF"); then
+          if ! out=$(git ls-remote --heads "https://github.com/$MUNINN_REPO" "refs/heads/$REF"); then
             echo "::error::could not query $MUNINN_REPO for branches — cannot prove '$REF' is not one"; exit 1
           fi
           if [ -n "$out" ]; then
@@ -151,10 +163,35 @@ jobs:
           PROJECT=$(jq -r '.gcp_project // ""' deploy/nais/vars-q2.json)
           REGION=$(jq -r '.vertex_region // ""' deploy/nais/vars-q2.json)
           TEAM=$(jq -r '.team // ""' deploy/nais/vars-q2.json)
+          # These three leave this step by three routes that all trust their
+          # shape: a URL, a `$GITHUB_ENV` line, and the comma-separated `VAR:`
+          # input on the deploy. So validate the SHAPE once, here, rather than
+          # guarding each route:
+          #   - a NEWLINE in any of them writes a second `$GITHUB_ENV` line,
+          #     which is either an "Invalid format" failure on a value that
+          #     looks fine in the JSON, or an arbitrary env var set for every
+          #     later step including both action calls;
+          #   - a COMMA silently splits the single `VAR:` line into a bogus
+          #     third variable and truncates `vertex_host`;
+          #   - anything outside this set is not a legal team slug, GCP project
+          #     id or Vertex location anyway. muninn refuses a region that is
+          #     not `^[a-z0-9-]+$` at boot, for the same reason: it becomes a
+          #     hostname label.
+          # The set is ENUMERATED rather than written `[!a-z0-9-]`, and that is
+          # not style. `a-z` in a shell pattern is a COLLATION range, not an
+          # ASCII one: measured, `case "My-Project" in *[!a-z0-9-]*)` REFUSES
+          # under LC_ALL=C and C.UTF-8 and ACCEPTS under en_US.UTF-8. A guard
+          # whose answer depends on the runner's locale is not a guard.
+          SAFE='abcdefghijklmnopqrstuvwxyz0123456789-'
           for pair in "gcp_project=$PROJECT" "vertex_region=$REGION" "team=$TEAM"; do
-            case "$pair" in
-              *=|*=null) echo "::error::${pair%%=*} is missing from vars-q2.json"; exit 1 ;;
-            esac
+            key=${pair%%=*}
+            val=${pair#*=}
+            if [ -z "$val" ]; then
+              echo "::error::$key is missing from vars-q2.json"; exit 1
+            fi
+            if [ -n "$(printf %s "$val" | tr -d "$SAFE")" ] || [ "${val#-}" != "$val" ]; then
+              echo "::error::$key is '$val' — expected lowercase letters, digits and hyphens only"; exit 1
+            fi
           done
 
           # muninn refuses `global` at boot in either Vertex variable name, and
@@ -334,6 +371,14 @@ jobs:
       # sharing nothing with the one that passed. Digest equality cannot be the
       # backstop: a type=docker export and a pushed OCI image are different
       # artifacts. The push reuses the shared type=gha cache, so this is fast.
+      # `pull: false`, and it is the one input that DIFFERS between the calls on
+      # purpose. The action defaults it to "true", which passes `--pull` to
+      # buildx: if the base image tag (`oven/bun:1-debian`) is republished in
+      # the minutes between the two calls, the push call resolves a different
+      # digest, every layer cache key changes, the whole chain rebuilds — and an
+      # image no `docker run` ever inspected is pushed and deployed, silently.
+      # The base is already in the builder's cache from the assert call, so
+      # there is nothing to re-pull.
       - name: Push the asserted image to GAR
         id: docker-push
         uses: nais/docker-build-push@v0
@@ -341,6 +386,7 @@ jobs:
           team: ${{ env.TEAM }}
           docker_context: ./muninn
           tag: muninn-${{ env.MUNINN_SHA }}
+          pull: "false"
           build_args: |
             WITH_MEDIA=false
             WITH_CLI=false

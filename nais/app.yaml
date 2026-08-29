@@ -188,6 +188,16 @@ spec:
       value: {{ muninn_ref }}
     - name: MUNINN_AUTH
       value: "entra"
+    # No file sink. muninn's logger otherwise writes a daily-rotating JSONL
+    # under ./logs with 7-day retention — a THIRD copy of colleague chat
+    # content beside `messages` and `activity_log`, on a container filesystem
+    # with no volume, and one the `nais` profile's info->debug demotion does not
+    # fully cover (it demotes src/core/message-processor.ts; the Slack, voice
+    # and response handlers log previews of their own). Nothing is lost: the
+    # console sink still reaches the platform aggregator, and /api/logs* is not
+    # even registered on this profile.
+    - name: LOG_DIR
+      value: "none"
     - name: MUNINN_TENANT
       value: {{ tenant }}
     # BOTH ingress origins, verbatim, with the scheme, comma-separated. This
