@@ -54,13 +54,13 @@ jobs:
           ref: ${{ inputs.muninn_ref }}
           path: muninn
 
-      # Every value the team has to supply lives in vars-dev.json, and a
+      # Every value the team has to supply lives in vars-q2.json, and a
       # half-filled file is the failure mode that deploys something wrong and
       # quietly. Fail on the placeholder, before anything is built.
       - name: No placeholder survives
         run: |
-          if grep -n "REPLACE_ME" deploy/nais/vars-dev.json; then
-            echo "::error::vars-dev.json still has placeholders — see docs/PREREQUISITES.md"; exit 1
+          if grep -n "REPLACE_ME" deploy/nais/vars-q2.json; then
+            echo "::error::vars-q2.json still has placeholders — see docs/PREREQUISITES.md"; exit 1
           fi
           if grep -rn "REPLACE_ME" deploy/bots/; then
             echo "::error::a placeholder survives in the bot folder"; exit 1
@@ -142,5 +142,5 @@ jobs:
         env:
           CLUSTER: ${{ inputs.cluster }}
           RESOURCE: deploy/nais/app.yaml
-          VARS: deploy/nais/vars-dev.json
+          VARS: deploy/nais/vars-q2.json
           VAR: image=REPLACE_ME_gar_path:${{ github.sha }}

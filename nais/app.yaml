@@ -130,7 +130,12 @@ spec:
       memory: 512Mi
 
   ingresses:
-    - {{ ingress }}
+    # BOTH domains, as melosys-console serves them. `intern.dev.nav.no` needs
+    # naisdevice; `ansatt.dev.nav.no` is how a team member WITHOUT developer
+    # access reaches the app at all. Adding the second one is not cosmetic —
+    # see MUNINN_ALLOWED_ORIGINS below, which is derived from the pair.
+    - {{ ingress_intern }}
+    - {{ ingress_ansatt }}
 
   env:
     # --- what this process is ------------------------------------------------
@@ -146,13 +151,23 @@ spec:
     # on oid and refuses to adopt the account, but this list is not.)
     - name: MUNINN_ADMIN_IDENTS
       value: {{ admin_oids }}
-    # The ingress origin, verbatim, with the scheme. This stops the pod TWICE if
-    # it is wrong: an authenticating mode refuses to BOOT on an empty value, and
-    # the origin check compares Origin against this list and never against the
-    # request's own Host — so a same-origin POST from the deployed page is
-    # refused, silently, on every write. The same list gates /chat/ws.
+    # BOTH ingress origins, verbatim, with the scheme, comma-separated. This
+    # stops the pod TWICE if it is wrong: an authenticating mode refuses to BOOT
+    # on an empty value, and the origin check compares Origin against this list
+    # and never against the request's own Host (deliberately, as a DNS-rebinding
+    # fix) — so a same-origin POST from the deployed page is refused, silently,
+    # on every write. The same list gates /chat/ws.
+    #
+    # DERIVED from the two ingress variables, not maintained as a third one. A
+    # separate `allowed_origins` value would reproduce the exact bug this is
+    # fixing: a third ingress, or a hostname correction, updates two values and
+    # leaves the third stale — and the symptom is a chat page that loads and
+    # then 403s every write and every socket upgrade, with nothing naming the
+    # cause. Two template tokens in one scalar is a shape no melosys-console
+    # variable uses today, which is why acceptance D3 reads the RENDERED
+    # manifest rather than assuming it renders.
     - name: MUNINN_ALLOWED_ORIGINS
-      value: {{ ingress }}
+      value: "{{ ingress_intern }},{{ ingress_ansatt }}"
 
     # --- the model -----------------------------------------------------------
     # Vertex, via the workload-identity SA granted above. No key anywhere.

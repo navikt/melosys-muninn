@@ -1,11 +1,13 @@
 {
   "_comment": "Every REPLACE_ME below is a value only the team can supply — see docs/PREREQUISITES.md. The deploy workflow refuses to run while any of them survives, so a half-filled file fails loudly instead of deploying something wrong.",
 
-  "app_name": "muninn",
+  "app_name": "melosys-muninn-q2",
   "namespace": "REPLACE_ME_namespace",
   "team": "REPLACE_ME_team",
 
-  "ingress": "REPLACE_ME_https_ingress_url",
+  "_comment_ingresses": "TWO hostnames, both full https:// URLs. Both feed spec.ingresses, and MUNINN_ALLOWED_ORIGINS is DERIVED from the pair in app.yaml — there is deliberately no third variable to keep in step. intern = naisdevice; ansatt = reachable for team members without developer access.",
+  "ingress_intern": "REPLACE_ME_https_ingress_intern_url",
+  "ingress_ansatt": "REPLACE_ME_https_ingress_ansatt_url",
 
   "tenant": "REPLACE_ME_entra_tenant",
   "group_muninn_bruker": "REPLACE_ME_group_object_id",

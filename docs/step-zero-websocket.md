@@ -28,13 +28,13 @@ that has surprised people before.
 
 Step zero is first but it is **not free**. Proving the upgrade *through the
 sidecar* requires §1–§4 of `PREREQUISITES.md` already in place — the app
-registration, admin consent, the group and the ingress — because `autoLogin`
+registration, admin consent, the group and **both** ingresses — because `autoLogin`
 refuses an unauthenticated upgrade **at the sidecar**, and it never reaches the
 app at all. The harness measured exactly that locally.
 
 So the sequence is:
 
-1. Buy §1–§4 (app registration + consent + group + ingress).
+1. Buy §1–§4 (app registration + consent + group + the two ingresses).
 2. Deploy something — a stub, or this image with a database that is not yet
    provisioned, which crash-loops on purpose but still serves nothing.
 3. Only then can the upgrade be attempted end to end.
@@ -62,9 +62,12 @@ Worth ruling out before blaming the proxy:
 
 1. **`MUNINN_ALLOWED_ORIGINS`.** The upgrade is origin-checked against the same
    configured list as every write, using the same code (`decideOrigin` — there
-   is deliberately no second origin check in the WS path). If the ingress origin
-   is not listed verbatim with its scheme, the handshake is refused and the page
-   otherwise looks fine.
+   is deliberately no second origin check in the WS path). If the origin of the
+   page you are on is not listed verbatim with its scheme, the handshake is
+   refused and the page otherwise looks fine. There are **two** origins here —
+   `intern` and `ansatt` — derived from the pair of ingress variables, so test
+   the socket from **both** domains. A single-origin list is a page that works
+   for whoever has naisdevice and fails silently for everyone else.
 2. **`Recreate` + one replica.** Every rollout drops every socket, by design.
    A reconnect right after a deploy is not a bug.
 3. **The bot.** A socket that connects and then answers nothing is the model

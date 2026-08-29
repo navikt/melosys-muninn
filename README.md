@@ -1,7 +1,7 @@
 # muninn-nais
 
 The deploy artifact for running [muninn](https://github.com/REPLACE_ME) on nais.
-It holds everything NAV-specific — the manifest, the ingress, the tenant, the
+It holds everything NAV-specific — the manifest, the ingresses, the tenant, the
 group ids, the bot persona — so that the muninn repo itself can stay public and
 carry none of it.
 
@@ -14,7 +14,7 @@ patched Dockerfile and no vendored source.
 | Path | What it is |
 |---|---|
 | `nais/app.yaml` | The Application manifest. Templated with `{{ }}`; every comment in it explains a constraint that is easy to "simplify" into an outage. |
-| `nais/vars-dev.json` | The values. Ships full of `REPLACE_ME_` — see `docs/PREREQUISITES.md`. |
+| `nais/vars-q2.json` | The values. Ships full of `REPLACE_ME_` — see `docs/PREREQUISITES.md`. |
 | `bots/melosys/` | The bot: persona, `config.json`, an empty `.mcp.json`. Copied into `bots/` in the build context. |
 | `build/Dockerfile.dockerignore` | The one file that makes the overlay land. See below. |
 | `.github/workflows/deploy.yml` | Check out muninn at a tag → overlay → build → assert → push → deploy. |
@@ -55,15 +55,19 @@ Two things about that step are not optional, and both were found by building it:
 `workflow_dispatch` with a muninn tag or commit SHA. Branches are refused: a
 rollback has to be "redeploy tag X", not "hope main has not moved".
 
-Before the first deploy, work through **`docs/PREREQUISITES.md`**. It is eight
-items and each one alone makes the pod useless. Two of them are not engineering
-work at all — the Entra app registration with admin consent, and the model
-region decision that is open with Team KI.
+Before the first deploy, work through **`docs/PREREQUISITES.md`**. Each item
+alone makes the pod useless, and the slowest is not engineering work at all: the
+Entra app registration with admin consent. The model question is **answered** —
+Gemini 2.5 Flash in `europe-north1` over Vertex's OpenAI-compatible endpoint —
+and what remains of it is which GCP project owns the quota.
 
 ## What this pod is
 
-- **dev-gcp only.** Prod carries a personopplysninger decision that is not an
-  engineering call.
+- **dev-gcp only, as `melosys-muninn-q2`.** Prod carries a personopplysninger
+  decision that is not an engineering call.
+- **Two ingresses.** `intern.dev.nav.no` needs naisdevice; `ansatt.dev.nav.no` is
+  how a team member without developer access reaches it. `MUNINN_ALLOWED_ORIGINS`
+  is derived from the pair rather than maintained beside them.
 - **Chat only.** `MUNINN_PROFILE=nais` drops thirteen route groups; the wiki,
   the plans board, the capture verticals and the logs page are not registered.
   What is left is `/chat`, the operator dashboard, and two health paths.

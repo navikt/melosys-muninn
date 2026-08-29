@@ -6,7 +6,7 @@ are a checklist and not a list of nice-to-haves. Nothing here can be invented
 from the muninn side, and none of these values may ever land in the public
 muninn repo.
 
-`nais/vars-dev.json` carries a `REPLACE_ME_` placeholder for each. The deploy
+`nais/vars-q2.json` carries a `REPLACE_ME_` placeholder for each. The deploy
 workflow refuses to run while any of them survives — a half-filled file is the
 failure mode that deploys something almost-right and quietly.
 
@@ -68,23 +68,35 @@ Used twice, and they are different uses: the sidecar's
 Texas is the authority on which directory it introspected, and a config value
 overruling it would be a second, weaker check in front of the real one.
 
-## 4. The ingress hostname
+## 4. The ingress hostnames — TWO of them
 
-Value: `ingress` — the full `https://…` URL.
+Values: `ingress_intern` and `ingress_ansatt` — full `https://…` URLs.
 Owner: **REPLACE_ME**
 
-It is used **twice from one variable**, and the second use is the one that bites.
-Besides `spec.ingresses`, it is `MUNINN_ALLOWED_ORIGINS`, and that stops the pod
-in two different ways:
+**Supply two hostnames, not one.** This is the shape `melosys-console` already
+serves, and its reason is not cosmetic: `intern.dev.nav.no` requires naisdevice,
+so a team member **without developer access** reaches the app only through
+`ansatt.dev.nav.no`. Both feed `spec.ingresses`.
+
+They are used a second time, and the second use is the one that bites.
+`MUNINN_ALLOWED_ORIGINS` is **derived** from the pair in `nais/app.yaml`
+(`value: "{{ ingress_intern }},{{ ingress_ansatt }}"`), and that variable stops
+the pod in two different ways:
 
 - an authenticating mode **refuses to boot** on an empty value, and
 - the origin check compares `Origin` against this list and **never** against the
   request's own `Host` — deliberately, as a DNS-rebinding fix — so a
-  *same-origin* POST from the deployed page is refused unless the ingress origin
+  *same-origin* POST from the deployed page is refused unless that page's origin
   is listed **verbatim, scheme included**. The same list gates `/chat/ws`.
 
 A wrong value here is a pod that loads the chat page and fails every write, with
-no error that names the cause.
+no error that names the cause. **A missing second value has exactly that
+symptom for exactly half the team**: everyone arriving on the ansatt domain.
+
+There is deliberately **no third `allowed_origins` variable**. One would
+reproduce the bug it looks like it prevents — a third ingress, or a hostname
+correction, updates two values and leaves the third stale, with the same silent
+symptom. Give the two hostnames; the origin list follows from them.
 
 ## 5. Admin identities
 
