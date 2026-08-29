@@ -30,7 +30,14 @@ Bun.serve({
   port: PORT,
   hostname: "0.0.0.0", // a container-local bind is unreachable to the kubelet
   fetch(req, server) {
-    const url = new URL(req.url);
+    // The base is not optional. With no Host header — an HTTP/1.0 probe, an L4
+    // checker, an ingress default-backend probe, `curl --http1.0` — Bun sets
+    // `req.url` to the BARE PATH ("/api/live"), which is not an absolute URL,
+    // and a one-argument `new URL` throws. Measured over a raw socket: every
+    // path answered 500, including /api/live (a liveness failure on a healthy
+    // pod) and including /chat/ws, where it replaced the 426 body that is this
+    // file's entire reason to exist with an unexplained 500.
+    const url = new URL(req.url, "http://localhost");
 
     // In autoLoginIgnorePaths, so this is reached with NO credential — which
     // is what the kubelet needs. Keep it trivial: a probe that touches
@@ -47,13 +54,31 @@ Bun.serve({
       "step-zero echo stub: this was not a WebSocket upgrade request.\n" +
         "If you see this body where you expected 101 Switching Protocols,\n" +
         "something in the path answered the upgrade as an ordinary request.\n",
-      { status: 426, headers: { "content-type": "text/plain; charset=utf-8" } },
+      {
+        status: 426,
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          // RFC 7231 §6.5.15 requires these on a 426, and a client that treats
+          // the status as "renegotiate" has nothing to read without them.
+          upgrade: "websocket",
+          connection: "Upgrade",
+        },
+      },
     );
   },
   websocket: {
-    // No `idleTimeout` override: Bun's own default would otherwise mask the
-    // property under test. If the socket dies at ~60 s we need that to be the
-    // INGRESS closing it, not this server.
+    // No `idleTimeout` override, and know what that does and does not buy.
+    // Omitting it does NOT leave the socket untimed: Bun's default is 120 s
+    // either way. What it buys is PARITY — real muninn is also `Bun.serve`
+    // with this same default, so whatever the ingress does to this socket it
+    // will do to that one.
+    //
+    // It also means the runbook's "survives past ~60 s" check is not a test of
+    // an idle connection and cannot be: uWS auto-pings at ~idleTimeout/2, the
+    // browser auto-pongs, and that traffic resets nginx's `proxy_read_timeout`.
+    // Measured: 180 s with no application frames and the socket still open.
+    // Disabling keepalives to make it a true idle test would test something
+    // the real app never does. See docs/step-zero-websocket.md.
     open(ws) {
       ws.send(`echo stub open at ${new Date().toISOString()}`);
     },
