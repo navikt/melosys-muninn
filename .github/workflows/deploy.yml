@@ -63,14 +63,10 @@ jobs:
             REPLACE_ME*|"") echo "::error::MUNINN_REPO is still a placeholder — see docs/PREREQUISITES.md §9"; exit 1 ;;
           esac
 
-      # A branch name makes the image unreproducible and the rollback story a
-      # guess. Ask the remote rather than testing two literal strings: a guard
-      # that only knows `main` and `master` waves `feature/x` straight through.
-      #
       # A branch makes the image unreproducible and the rollback story a guess.
-      # This is a POSITIVE check — only a TAG that exists upstream or a full
-      # 40-character commit SHA passes — after two rounds of trying to prove the
-      # negative, both of which shipped a hole:
+      # This is a POSITIVE check — only a TAG that exists upstream, or a
+      # 40-character commit SHA, passes. It arrived that way after THREE shipped
+      # attempts to prove the negative, each of which had a hole:
       #
       #   `[ "$REF" = main ] || [ "$REF" = master ]`   waved `feature/x` through.
       #   `git ls-remote --heads URL "$REF"`           patterns match from the
@@ -102,17 +98,26 @@ jobs:
         env:
           REF: ${{ inputs.muninn_ref }}
         run: |
-          KIND=$(printf %s "$REF" | jq -Rsr 'if test("\\A[0-9a-f]{40}\\z") then "sha" else "other" end')
+          # [0-9a-fA-F], not [0-9a-f]. git and actions/checkout both accept an
+          # uppercase object name, and with no tags upstream a pasted SHA is the
+          # ONLY usable input — so a case-sensitive test would refuse a value
+          # with the message "neither a tag nor a full 40-character commit SHA"
+          # about something that is exactly that.
+          KIND=$(printf %s "$REF" | jq -Rsr 'if test("\\A[0-9a-fA-F]{40}\\z") then "sha" else "other" end')
           if ! refs=$(git ls-remote --refs "https://github.com/$MUNINN_REPO"); then
             echo "::error::could not query $MUNINN_REPO for refs — cannot verify '$REF'"; exit 1
           fi
-          if printf '%s\n' "$refs" | awk -v w="refs/heads/$REF" '$2==w{f=1} END{exit !f}'; then
+          # Through ENVIRON, never `awk -v`: `-v` expands escape sequences in the
+          # value BEFORE the comparison, so `REF=a\142` would be compared as
+          # `ab` — the guard would then pass judgement on a different string
+          # than the one actions/checkout is handed.
+          if printf '%s\n' "$refs" | w="refs/heads/$REF" awk 'BEGIN{w=ENVIRON["w"]} $2==w{f=1} END{exit !f}'; then
             echo "::error::'$REF' is a BRANCH in $MUNINN_REPO — pass a tag or a full commit SHA"; exit 1
           fi
           if [ "$KIND" = "sha" ]; then
             echo "ref is a commit SHA"; exit 0
           fi
-          if printf '%s\n' "$refs" | awk -v w="refs/tags/$REF" '$2==w{f=1} END{exit !f}'; then
+          if printf '%s\n' "$refs" | w="refs/tags/$REF" awk 'BEGIN{w=ENVIRON["w"]} $2==w{f=1} END{exit !f}'; then
             echo "ref is the tag $REF"; exit 0
           fi
           echo "::error::'$REF' is neither a tag in $MUNINN_REPO nor a full 40-character commit SHA"; exit 1
@@ -192,18 +197,21 @@ jobs:
           #
           # The check is in `jq`, and the VALUES NEVER CROSS INTO THE SHELL —
           # only the names of the offending keys do. That is the mechanism, not
-          # a style preference, and it is the third attempt at this guard:
+          # a style preference. This guard has shipped in two forms; the first
+          # had a hole:
           #
-          #   `grep REPLACE_ME <file>` also read the `_comment` keys, so it
-          #       refused a correctly filled file forever.
-          #   `case "$val" in *[!a-z0-9-]*)` is a COLLATION range, ASCII only
-          #       where bash's `globasciiranges` is on (it is, on bash >= 5, so
-          #       this was sound on the runner and unsound on older shells).
           #   `[ -n "$(printf %s "$val" | tr -d "$SAFE")" ]` — command
           #       substitution strips TRAILING NEWLINES, so a value whose only
           #       illegal characters were newlines passed. Measured: with
           #       `vertex_region` set to "eu\nrogue" the step exited 0, wrote a
           #       two-line VERTEX_HOST and baked a broken baseUrl into the bot.
+          #
+          # (A `case "$val" in *[!a-z0-9-]*)` form was written and discarded
+          # before it was committed — bracket ranges are COLLATION ranges, ASCII
+          # only where bash's `globasciiranges` is on. It is noted because the
+          # obvious spelling is the one that looks right. The `REPLACE_ME` grep
+          # in the step ABOVE is a different guard and is still live: it asks
+          # whether a value was filled in, not whether it is usable.)
           #
           # `\A` and `\z`, not `^` and `$`: measured in jq, `test("^[a-z0-9-]+$")`
           # ACCEPTS "eu\n" — Oniguruma's `$` matches before a trailing newline.
@@ -211,6 +219,18 @@ jobs:
           #
           # The `== "null"` arm preserves a property the shell version had: a
           # missing key can never be mistaken for a value, however it arrives.
+          # FIRST, and it is the arm round 2 dropped. jq given an EMPTY (or
+          # whitespace-only) document runs the program zero times, emits
+          # nothing and exits 0 — so `BAD` came back empty and the step passed,
+          # deriving `https://aiplatform..rep.googleapis.com/v1/projects//…` and
+          # baking it into the shipped bot config, with `TEAM=` written to
+          # $GITHUB_ENV. Measured. Every other malformed shape already died
+          # under `-e` (a JSON array or scalar -> rc 5, a parse error -> rc 5, a
+          # missing file -> rc 2); zero output was the one that slipped.
+          jq -e 'type == "object"' deploy/nais/vars-q2.json > /dev/null || {
+            echo "::error::vars-q2.json is empty, unreadable, or not a JSON object"; exit 1
+          }
+
           BAD=$(jq -r '
             . as $doc
             | ["gcp_project", "vertex_region", "team"]
@@ -283,6 +303,14 @@ jobs:
           # precisely when the thing it guards was absent. Observed live.
           if [ ! -d deploy/bots ]; then
             echo "::error::deploy/bots is missing — there is no bot folder to overlay"; exit 1
+          fi
+          # An EMPTY deploy/bots also passes a bare grep, which is the
+          # "matched nothing" case this step claims to catch. Two later steps
+          # would catch it (the assign's glob, the exact-set assertion), but
+          # both are outside this step and the claim has to be true here.
+          set -- deploy/bots/*/config.json
+          if [ ! -e "$1" ]; then
+            echo "::error::deploy/bots has no <bot>/config.json — nothing to overlay"; exit 1
           fi
           if grep -rn "REPLACE_ME" deploy/bots/; then
             echo "::error::a placeholder survives in the bot folder"; exit 1

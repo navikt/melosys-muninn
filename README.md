@@ -78,14 +78,17 @@ have nothing to catch.
 
 ## Deploying
 
-`workflow_dispatch` with a muninn tag or a **full 40-character commit SHA**.
-The guard is positive — it asks the remote for its ref list and requires an
-exact match, so a branch, a `refs/heads/…` spelling, a glob and a short SHA are
-all refused — because a rollback has to be "redeploy X", not "hope main has not
-moved". Whatever is dispatched is resolved to a commit SHA immediately, and
-that SHA is what the GAR tag (`muninn-<sha>`) and the pod's `MUNINN_REF` carry:
-a tag can be moved upstream. Public muninn has no tags today, so the first
-deploy will name a SHA.
+`workflow_dispatch` with a muninn tag or a **40-character commit SHA**. The
+guard is positive rather than a list of names to refuse: it fetches the remote's
+ref list once and compares exact fields, so a branch, a `refs/heads/…` spelling
+and a glob are all refused, and a tag is accepted only if it is really there. A
+SHA is accepted on shape alone — nothing can ask a remote whether an arbitrary
+commit exists — so a short SHA is refused and a typo'd one fails later in
+`actions/checkout`. The point is that a rollback has to be "redeploy X", not
+"hope main has not moved". Whatever is dispatched is resolved to a commit SHA
+immediately, and that SHA is what the GAR tag (`muninn-<sha>`) and the pod's
+`MUNINN_REF` carry: a tag can be moved upstream. Public muninn has no tags
+today, so the first deploy will name a SHA.
 
 Before the first deploy, work through **`docs/PREREQUISITES.md`**. §1–§10 are
 ten items and each one alone makes the pod useless; §0 is not one of them, it

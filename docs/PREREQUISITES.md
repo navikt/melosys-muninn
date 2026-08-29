@@ -274,12 +274,19 @@ Two things still have to exist outside this repo.
 - **`MUNINN_REPO`** — the `owner/repo` slug of PUBLIC muninn. It is still a
   placeholder, and the workflow refuses on it before it queries anything.
 
-  The dispatch input accepts **a tag that exists upstream, or a full
-  40-character commit SHA** — checked positively against the remote's ref list,
-  so a branch, a `refs/heads/…` spelling, a glob and a short SHA are all
-  refused. Measured 2026-08-29: public muninn carries **no tags at all**, so
-  until someone tags it, a full commit SHA is the only value the first deploy
-  can be given.
+  The dispatch input accepts **a tag that exists upstream, or a 40-character
+  commit SHA**, and the two arms are checked differently — worth knowing,
+  because only one of them consults the remote. The workflow fetches the ref
+  list once and compares exact fields: a value matching `refs/heads/<it>` is
+  refused as a branch, and a TAG is accepted only if `refs/tags/<it>` is
+  actually there. A **SHA is accepted on SHAPE alone** (40 hex, either case) —
+  nothing can ask a remote whether an arbitrary commit exists without fetching
+  it, so a typo'd SHA passes this step and fails inside `actions/checkout`.
+  A branch, a `refs/heads/…` spelling, a glob and a short SHA are all refused.
+
+  Measured 2026-08-29: public muninn carries **no tags at all**, so until
+  someone tags it, a commit SHA is the only value the first deploy can be
+  given — which is also why the SHA arm accepts upper case.
 
 Two properties of that pipeline worth knowing before someone "simplifies" them:
 
