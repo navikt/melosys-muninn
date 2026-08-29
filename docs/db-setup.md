@@ -28,7 +28,7 @@ privilege levels, and only one statement needs the higher one.
 | 1 | Declare `gcp.sqlInstances` in `nais/app.yaml` and apply | the deploy | — |
 | 2 | Superuser reset on the instance | GCP console, team project | you cannot do step 3 |
 | 3 | `CREATE EXTENSION vector` | **elevated role, this step only** | migrations fail at the first `vector(384)` column |
-| 4 | `bun db/provision.ts --yes` — applies `db/init.sql` **and** baselines | **the app user** | the elevated role owns ~20 tables and the pod gets *permission denied* at first query — not a schema error, so it reads as a code bug |
+| 4 | `bun db/provision.ts --yes` — applies `db/init.sql` **and** baselines | **the app user** | the elevated role owns all 33 of init.sql's tables and the pod gets *permission denied* at first query — not a schema error, so it reads as a code bug |
 
 Step 4 does two things that used to be two steps. It applies `init.sql` — the
 consolidated schema — and then *marks applied* every shipped migration, so the
@@ -68,7 +68,7 @@ entrypoint's `DATABASE_URL` export:
 ```bash
 # a) a debug copy of the running pod, with the entrypoint replaced
 kubectl debug -n <namespace> <pod> --copy-to=muninn-schema \
-  --container=muninn --profile=general -- bun db/provision.ts --yes
+  --container=melosys-muninn-q2 --profile=general -- bun db/provision.ts --yes
 
 # b) a naisjob with its own `command:` — the same image, the same env
 ```

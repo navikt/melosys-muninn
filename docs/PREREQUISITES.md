@@ -8,9 +8,22 @@ from the muninn side.
 `nais/vars-q2.json` carries a `REPLACE_ME_` placeholder for most of them, and
 the deploy workflow refuses to run while any placeholder survives — a
 half-filled file is the failure mode that deploys something almost-right and
-quietly. Three items are **not** values in that file: §9 is a slug in the
-workflow, §10 is a secret created in the namespace, and §0 is a proof rather
-than a value.
+quietly.
+
+**Do not work this list by hunting `REPLACE_ME`s.** Most of these sections are
+actions or decisions rather than values, and they include the two slowest things
+on the list:
+
+- **§1** — an application registration and its admin consent. The longest pole
+  in the schedule, and nothing in any file marks it.
+- **§10** — a Kubernetes secret created in the namespace. A cluster action.
+- **§5** — no value of its own by design, and it says so in its own first line;
+  the oid list it describes lives in §10's secret.
+- **§6** — Cloud SQL plus the schema run. Its three `db_*` keys already carry
+  working defaults, so no placeholder draws attention to it.
+- **§7** — the model, decided; the value lives in the bot folder, not here.
+- **§9** — a slug in the workflow, plus registry and deploy-identity access.
+- **§0** — a proof to run, not a value at all.
 
 **This repo is public**, so two rules apply to what is written down here.
 *Values*: the infrastructure names — namespace, team, ingresses, tenant, project,
@@ -47,10 +60,14 @@ first.
 behaviour locally — a WS upgrade does arrive carrying `Authorization: Bearer`,
 and the session cookie is `SameSite=Lax`. The ingress is the untested half.
 
-**The artifacts are in this repo**: `build/echo/` (the WebSocket echo image —
-build and push by hand) and `nais/step-zero/` (the stub `Application` and its
-own eight-value vars file). See `step-zero-websocket.md` for how to apply them
-and what to look for.
+**Everything step zero needs is in this repo**: `build/echo/` (the WebSocket
+echo image), `nais/step-zero/` (the stub `Application` and its own seven-value
+vars file) and `.github/workflows/step-zero.yml`, which builds the image,
+pushes it and applies the stub in one `workflow_dispatch`. Fill
+`vars-step-zero.json` and dispatch it. There is deliberately **no by-hand
+path** — the deploy identity below is federated inside GitHub Actions and no
+human holds a credential for it. See `step-zero-websocket.md` for what to look
+for once it is up.
 
 ---
 
@@ -163,8 +180,8 @@ on each step because getting the middle one wrong fails *silently*:
 4. `bun db/provision.ts --yes` — **as the app user.** Applies `db/init.sql` and
    baselines in one command, from the image (muninn #486; the pinned muninn ref
    must contain it). If the elevated role runs it, the
-   app user ends up without ownership of ~20 tables and the pod gets
-   permission-denied at first query rather than a clear schema error.
+   app user ends up without ownership of any of init.sql's 33 tables and the
+   pod gets permission-denied at first query rather than a clear schema error.
 
 Step 4 is two things in one command: apply the consolidated schema, then
 *mark-applied* every shipped migration. Without the second half, migrations 006
@@ -285,10 +302,14 @@ Two things still have to exist outside this repo.
   `vars-q2.json` rather than hardcoding — a hardcoded copy beside the file's own
   `team` value would push to one team's GAR and label the app with another.
   Nothing here needs a token: the workflow declares `id-token: write` at
-  **workflow** level and `nais/login` federates.
+  **workflow** level and `nais/login` federates. ⚠️ That is also why there is
+  no by-hand deploy anywhere in this repo, including step zero: this identity
+  exists **inside a workflow run** and a human at a laptop cannot present it.
 
-  Note the **image is named after this repo**, lowercased — so it is
-  `…/<team>/melosys-muninn`, not `…/<team>/muninn`.
+  Note the **image is named after this repo**, lowercased — the repo is
+  `navikt/melosys-muninn`, so it is `…/<team>/melosys-muninn`, not
+  `…/<team>/muninn`. Step zero's echo image lands in the same repo-named path
+  and is told apart by its `echo-<sha>` tag.
 
 - **`MUNINN_REPO`** — the `owner/repo` slug of PUBLIC muninn. It is still a
   placeholder, and the workflow refuses on it before it queries anything.
