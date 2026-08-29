@@ -64,13 +64,10 @@ jobs:
           esac
 
       # POSITIVE: only a tag that really exists upstream, or a 40-hex commit
-      # SHA (either case — git and actions/checkout both accept upper), passes.
-      # Fetch the ref list ONCE and compare EXACT FIELDS through ENVIRON: every
-      # pattern-based form of this guard has had a hole, and `awk -v` expands
-      # escapes in the value. The exit status is checked separately from the
-      # output — "returns empty" is also satisfied by a command that errored.
-      # `$REF` is read through `env:`, never interpolated into the body.
-      # Three earlier forms and why each failed: docs/pipeline-guards.md.
+      # SHA (either case), passes. Fetch the ref list ONCE and compare EXACT
+      # FIELDS through ENVIRON. The exit status is checked separately from the
+      # output. `$REF` is read through `env:`, never interpolated into the body.
+      # Every earlier form of this guard, and why each failed: docs/pipeline-guards.md §2.
       - name: The ref must be a tag or a full commit SHA, never a branch
         env:
           REF: ${{ inputs.muninn_ref }}
@@ -164,22 +161,16 @@ jobs:
       # nais/deploy, so no one maintains it either.
       - name: Derive the Vertex base URL, assign it into the bot folder
         run: |
-          # These three leave this step by three routes that all trust their
-          # shape: a URL, a `$GITHUB_ENV` line, and the comma-separated `VAR:`
-          # input on the deploy. A NEWLINE writes a second `$GITHUB_ENV` line; a
-          # COMMA splits the `VAR:` line and truncates `vertex_host`.
+          # gcp_project, vertex_region and team leave this step by three routes
+          # that all trust their shape: a URL, a `$GITHUB_ENV` line, and the
+          # comma-separated `VAR:` input on the deploy.
           #
           # The check is in `jq` and the VALUES NEVER CROSS INTO THE SHELL —
-          # only the names of offending keys do. That is the mechanism, not a
-          # style preference. Earlier forms and why each failed:
-          # docs/pipeline-guards.md.
-          #
-          # `-s`, and `length == 1`: without slurping, a CONCATENATED JSON
-          # STREAM ({...}{...} — a merge conflict resolved by keeping both
-          # sides) runs the program once per document, `-e` judges only the
-          # last, and each document is individually clean. `jq -r '.team'` then
-          # returns a MULTI-LINE value and the newline this guard exists to
-          # refuse walks straight through. Measured.
+          # only the names of offending keys do. `-s` + `length == 1` because a
+          # concatenated stream is individually clean per document and yields a
+          # MULTI-LINE value; `\A`/`\z` because Oniguruma's `$` matches before
+          # a trailing newline. Every earlier form, and why each failed:
+          # docs/pipeline-guards.md §3.
           jq -e -s 'length == 1 and (.[0] | type == "object")' deploy/nais/vars-q2.json > /dev/null || {
             echo "::error::vars-q2.json is not exactly one JSON object (empty, unreadable, malformed, or two documents concatenated)"; exit 1
           }
@@ -269,25 +260,49 @@ jobs:
             echo "::error::deploy/bots is missing — there is no bot folder to overlay"; exit 1
           fi
           # An EMPTY deploy/bots passes a bare grep too — the "matched nothing"
-          # case. Assert the invariant this POD needs, per bot folder:
+          # case. Assert the invariant this POD needs, per bot folder. muninn's
+          # own nais boot line states it: "every bot on this deployment must be
+          # pinned to a non-CLI connector" — the profile's CLI refusal covers
+          # spawnHaiku, NOT the chat connector, and the image is built
+          # WITH_CLI=false.
           #
-          #   CLAUDE.md   — muninn discovers a bot by this file and nothing else
-          #                 (discoverAllBots), and exits 1 on zero bots.
-          #   config.json — OPTIONAL in muninn generally, REQUIRED here:
-          #                 `resolveConnector` falls back to `claude-cli` when a
-          #                 bot names no connector, and this image is built
-          #                 WITH_CLI=false. An unpinned bot spawns a missing
-          #                 binary on every turn. See docs/bot-folder-notes.md.
+          # The connector is checked by VALUE, not by "config.json exists":
+          # `resolveConnector` is `botConfig.connector ?? "claude-cli"`, and
+          # discovery WARNS AND DROPS an unknown enum value — so a mistyped
+          # `"openai_compat"` still reads as pinned in the file while being
+          # unset at runtime. Allowlist, therefore, not a != comparison.
           found=0
           for d in deploy/bots/*/; do
             [ -d "$d" ] || continue
+            name=$(basename "$d")
             found=$((found + 1))
-            [ -s "$d/CLAUDE.md" ] || { echo "::error::${d} has no CLAUDE.md — muninn would not discover it"; exit 1; }
-            [ -f "$d/config.json" ] || { echo "::error::${d} has no config.json — an unpinned bot falls back to claude-cli, which this image does not carry"; exit 1; }
+            case $(printf %s "$name" | jq -Rsr 'if test("\\A[a-z0-9][a-z0-9-]*\\z") then "ok" else "bad" end') in
+              ok) ;;
+              *) echo "::error::bot folder name '$name' is not a plain slug — it is used unquoted downstream and as a container path"; exit 1 ;;
+            esac
+            # -f AND -s: `[ -s ]` alone is TRUE FOR A DIRECTORY, and a CLAUDE.md
+            # that is a directory passes every later check too, then throws an
+            # uncaught EISDIR in readFileSync at pod boot.
+            { [ -f "$d/CLAUDE.md" ] && [ -s "$d/CLAUDE.md" ]; } || {
+              echo "::error::${d}CLAUDE.md is missing, empty or not a regular file — muninn discovers a bot by that file and exits 1 on zero bots"; exit 1
+            }
+            [ -f "$d/config.json" ] || {
+              echo "::error::${d}config.json is missing or not a regular file"; exit 1
+            }
+            jq -e '.connector == "copilot-sdk" or .connector == "openai-compat" or .connector == "claude-sdk"' "$d/config.json" > /dev/null || {
+              echo "::error::${d}config.json must pin connector to copilot-sdk, openai-compat or claude-sdk — unset, mistyped or claude-cli spawns a claude binary this image does not carry, on every turn"; exit 1
+            }
           done
           if [ "$found" -eq 0 ]; then
             echo "::error::deploy/bots contains no bot folder"; exit 1
           fi
+          # Everything under deploy/bots/ must BE a bot folder: a stray file
+          # rides `cp -R` into the image and fails the per-bot assertion later
+          # with a message about discovery, concerning a file discovery ignores.
+          for e in deploy/bots/*; do
+            [ -d "$e" ] || { echo "::error::$e is not a bot folder — deploy/bots/ holds bot directories only"; exit 1; }
+          done
+
           if grep -rn "REPLACE_ME" deploy/bots/; then
             echo "::error::a placeholder survives in the bot folder"; exit 1
           fi
@@ -385,7 +400,7 @@ jobs:
           [ "$GOT" = "$WANT" ] || { echo "::error::/app/bots is not this repo's bot set"; exit 1; }
           for bot in $WANT; do
             docker run --rm --entrypoint sh "$IMG" \
-              -c "test -s /app/bots/$bot/CLAUDE.md" \
+              -c "test -f /app/bots/$bot/CLAUDE.md && test -s /app/bots/$bot/CLAUDE.md" \
               || { echo "::error::$bot has no CLAUDE.md in the image — discoverAllBots would exit 1"; exit 1; }
           done
 

@@ -1,6 +1,6 @@
 # The deploy workflow's guards, and every form of them that was wrong
 
-`.github/workflows/deploy.yml` carries five guards. Each one is short in the
+`.github/workflows/deploy.yml` carries seven refusals. Each one is short in the
 file and each one arrived there after at least one form that looked right and
 was not. This page is where that history lives, so the workflow can state the
 rule instead of the archaeology — the comments grew to several times the code
@@ -35,7 +35,7 @@ case. Fetch the ref list once; compare exact fields.
 | `git ls-remote --heads URL "$REF"` | `ls-remote` patterns are **globs matched from the right on `/` boundaries**. The legitimate tag `x` was reported as a branch whenever any `feature/x` existed upstream — fail-closed, but with an error message that was simply untrue, sending the operator to look for a branch that does not exist. A glob like `*` was a pattern rather than a name. |
 | `git ls-remote --heads URL "refs/heads/$REF"` | Anchoring fixed the false positive and **opened a bypass**: `refs/heads/main` matched nothing, and `actions/checkout` accepts that spelling and resolves it to the branch tip. |
 | `awk -v w="refs/heads/$REF"` | `awk -v` expands escape sequences in the assigned value *before* the comparison, so `REF='a\142'` was compared as `ab` — the guard passed judgement on a different string than the one `actions/checkout` is handed. Use `ENVIRON`. |
-| `test("\Az[0-9a-f]{40}\z")` | Case-sensitive. git and `actions/checkout` both accept an uppercase object name, and since public muninn has **no tags at all**, a pasted SHA is the only usable input — so this refused the one path the first deploy will take, with a message denying the value was a SHA. |
+| `test("\A[0-9a-f]{40}\z")` | Case-sensitive. git and `actions/checkout` both accept an uppercase object name, and since public muninn has **no tags at all**, a pasted SHA is the only usable input — so this refused the one path the first deploy will take, with a message denying the value was a SHA. |
 
 Two properties survive from the earliest version and still matter: `MUNINN_REPO`
 is an `owner/repo` slug, not a valid remote on its own; and the **exit status is
@@ -43,9 +43,20 @@ checked separately from the output**, because "returns empty" is also satisfied
 by a command that errored.
 
 **The two arms are checked differently.** A tag is verified against the remote's
-ref list. A SHA is accepted on **shape alone** — nothing can ask a remote
-whether an arbitrary commit exists without fetching it — so a typo'd SHA passes
-this step and fails inside `actions/checkout`.
+ref list. A SHA is accepted on **shape alone**, so a typo'd SHA passes this step
+and fails inside `actions/checkout`. That is a choice, not an impossibility:
+GitHub's `GET /repos/{owner}/{repo}/commits/{sha}` answers it over HTTP, and
+`git fetch <url> <sha>` works where `uploadpack.allowReachableSHA1InWant` is on.
+Neither is used here — `ls-remote` cannot do it, and the failure mode is a loud
+one step later — but the hardening exists if a bad SHA ever costs a build.
+
+## 2b. "MUNINN_REPO must be filled in"
+
+**Rule:** refuse while the slug is a placeholder — and do it **before** the ref
+guard, not after. The ref guard queries the remote, so with a placeholder repo
+it dies on a git transport error first: fail-closed either way, misdiagnosed on
+the very first run of a fresh clone. The staged workflow had the placeholder
+check as step 4 and the ref guard as step 2.
 
 ## 3. "Derive the Vertex base URL" — the value shape check
 
@@ -72,6 +83,15 @@ literal pattern `deploy/bots/*/config.json`, failed the redirect, and exited 0
 having assigned nothing. Counting the assignments and refusing zero is what
 makes the step's own claim true.
 
+## 4b. The derived build-context ignore
+
+**Rule:** `grep -q '^bots/$' muninn/.dockerignore` must SUCCEED before the line
+is stripped. The file is derived from public muninn's own `.dockerignore` rather
+than checked in as a second copy — the repo used to carry
+`build/Dockerfile.dockerignore`, a hand-maintained duplicate whose own header
+said "keep it in sync", with nothing enforcing it. The `grep -q` is what makes
+an upstream rename break the build instead of silently dropping an exclusion.
+
 ## 5. "No placeholder survives in the bot folder"
 
 **Rule:** every `deploy/bots/<bot>/` has a non-empty `CLAUDE.md` and a
@@ -82,11 +102,26 @@ makes the step's own claim true.
 | `if grep -rn "REPLACE_ME" deploy/bots/; then` | `grep -r` on a **missing path exits 2**, which makes the `if` false. The backstop passed precisely when the thing it guards was absent. |
 | `[ -d deploy/bots ]` alone | An **empty** `deploy/bots/` still passes: the directory exists and the grep matches nothing. |
 | `set -- deploy/bots/*/config.json; [ ! -e "$1" ]` | `[ -e ]` is true for a directory, so a directory *named* `config.json` satisfied it. And the message ("nothing to overlay") was wrong for a bot folder carrying only a `CLAUDE.md`. |
+| `[ -f "$d/config.json" ]` | **Asserted a proxy, not the property.** A `config.json` containing `{}` — or `{"connector":"claude-cli"}` — passed. So did a *mistyped* value: discovery **warns and drops** an unknown enum, so `"openai_compat"` reads as pinned in the file and is unset at runtime. Check the connector by VALUE against an allowlist. |
+| `[ -s "$d/CLAUDE.md" ]` | `[ -s ]` is **true for a directory** — the same gap that `-f` had just been introduced to close, one line below. A `CLAUDE.md` that is a directory passed here AND the image assertion (also `test -s`), then threw an uncaught `EISDIR` from `readFileSync` at pod boot: CrashLoopBackOff with all fifteen steps green. |
 
-**Why `config.json` is required here even though muninn treats it as optional.**
-`discoverAllBots` needs only a `CLAUDE.md`, and `config.json` is read as an
-optional per-bot override — that is muninn generally. On **this pod** it is
-mandatory: `resolveConnector` falls back to `claude-cli` when a bot names no
-connector, and the image is built `WITH_CLI=false`, so an unpinned bot spawns a
-missing binary on every turn. The guard's message says so rather than claiming
-there is nothing to overlay. See `bot-folder-notes.md` §2.
+**Why the CONNECTOR, not just the file.** `discoverAllBots` needs only a
+`CLAUDE.md`, and `config.json` is an optional per-bot override — that is muninn
+generally. On **this pod** the connector is mandatory, and muninn's own nais
+boot line says so: *"every bot on this deployment must be pinned to a non-CLI
+connector"* — the profile's CLI refusal lives in `spawnHaiku` and covers the
+Haiku router, the watchers and the scheduler, but **not the chat connector**.
+`resolveConnector` is `botConfig.connector ?? "claude-cli"` and the image is
+built `WITH_CLI=false`, so an unpinned bot spawns a missing binary on every
+turn, in front of a colleague, with the whole pipeline green.
+
+The guard therefore checks the VALUE against the allowlist `copilot-sdk` /
+`openai-compat` / `claude-sdk` — which is `CONNECTOR_VALUES` minus `claude-cli`
+— and that single test covers unset, mistyped and explicitly-`claude-cli` alike.
+See `bot-folder-notes.md` §2.
+
+**And the folder names.** Every entry under `deploy/bots/` must BE a directory
+(a stray file rides `cp -R` into the image and then fails the per-bot assertion
+with a message about discovery, concerning a file discovery ignores), and each
+name must be a plain slug — it is used unquoted in the image assertion's
+`for bot in $WANT` loop and as a container path.
