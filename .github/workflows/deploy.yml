@@ -226,8 +226,17 @@ jobs:
           assigned=0
           for f in deploy/bots/*/config.json; do
             [ -f "$f" ] || continue
-            jq --arg u "$BASE_URL" '.baseUrl = $u' "$f" > "$f.tmp"
-            mv "$f.tmp" "$f"
+            # Workspace-scoped and named after its target, so uniqueness is
+            # not the concern here that it is for a /tmp path — a job gets its
+            # own workspace. The concern is a SILENT PARTIAL WRITE: an
+            # interrupted jq leaves a truncated .tmp that the mv then installs
+            # as the bot's config. Both halves checked, and the .tmp removed on
+            # any exit rather than left in the build context.
+            trap 'rm -f "$f.tmp"' EXIT
+            jq --arg u "$BASE_URL" '.baseUrl = $u' "$f" > "$f.tmp" || {
+              echo "::error::could not write a baseUrl into $f"; exit 1
+            }
+            mv "$f.tmp" "$f" || { echo "::error::could not install $f.tmp over $f"; exit 1; }
             assigned=$((assigned + 1))
             echo "assigned baseUrl in $f"
           done
@@ -361,7 +370,44 @@ jobs:
           grep -q '^bots/$' muninn/.dockerignore || {
             echo "::error::muninn/.dockerignore no longer excludes bots/ — re-check the overlay"; exit 1
           }
-          grep -v '^bots/$' muninn/.dockerignore > /tmp/di && mv /tmp/di muninn/.dockerignore
+
+          # Same rule as the bot-entries listing above, and this line is why the
+          # rule is written down rather than applied twice by hand: it was a
+          # fixed `/tmp/di` with no uniqueness, no trap and no annotation — every
+          # property the round that introduced mktemp claimed to have swept, on
+          # a line that round did not touch. Measured with the target directory
+          # at mode 500: rc 1, `Permission denied` on stderr, ZERO ::error::
+          # annotations, and .dockerignore left UNSTRIPPED so the overlay would
+          # not land. It survived `set -e` because -e is exempt for the
+          # non-final command of an `&&` list — the same exemption a comment two
+          # steps above already documents.
+          STRIPPED=$(mktemp "${RUNNER_TEMP:-/tmp}/dockerignore.XXXXXXXX") || {
+            echo "::error::mktemp failed under ${RUNNER_TEMP:-/tmp} — is it missing or read-only?"; exit 1
+          }
+          trap 'rm -f "$STRIPPED"' EXIT
+
+          # `grep -v` exits 1 when it selects NO lines — a .dockerignore whose
+          # only entry is `bots/`. That is a legitimate result (an empty ignore
+          # file), not a failure, and the previous `&& mv` form treated it as
+          # one: the mv never ran, the exclusion stayed, and the step died on
+          # the `&&` list's status with nothing printed. Exit >1 is the real
+          # error. rc is collected through `|| rc=$?` so `set -e` does not abort
+          # before the distinction can be made.
+          rc=0
+          grep -v '^bots/$' muninn/.dockerignore > "$STRIPPED" || rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "::error::could not read muninn/.dockerignore (grep exit $rc)"; exit 1
+          fi
+          # `mv`, not `cat >`. Measured both: `cat >` truncates the TARGET, so
+          # it refuses a read-only .dockerignore that the previous `mv` form
+          # replaced without complaint — a stricter failure on a state that
+          # works today, i.e. the fix injecting its own defect. `mv` keeps the
+          # old behaviour and gains the annotation, which is the whole point:
+          # with muninn/ read-only the old line failed rc 1 with ZERO
+          # annotations, this one names it.
+          mv "$STRIPPED" muninn/.dockerignore || {
+            echo "::error::could not install the stripped .dockerignore over muninn/.dockerignore"; exit 1
+          }
 
       # Build WITHOUT pushing, and load the result into the local daemon, so the
       # assertions below run against the artifact before it can reach GAR. The
@@ -424,9 +470,10 @@ jobs:
           #                               (under `ls -1` it was invisible here)
           #   ghost on BOTH sides      -> GOT == WANT, this comparison PASSES.
           # What refuses the both-sides case is the SLUG GUARD in the
-          # bot-folder step, which refuses any name that is not `[a-z0-9-]`
-          # and therefore refuses a dot-entry unconditionally, before the
-          # overlay ever runs. Measured, all three fixtures: image-only ghost
+          # bot-folder step, whose pattern is `\A[a-z0-9][a-z0-9-]*\z` — it
+          # pins the FIRST character to a letter or digit (so `-foo` is refused
+          # too, and the empty name), which is what refuses a dot-entry
+          # unconditionally, before the overlay ever runs. Measured, all three fixtures: image-only ghost
           # -> this comparison refuses; both-sides ghost -> the slug guard
           # refuses; a both-sides ghost that somehow reached here WELL-FORMED
           # (non-empty CLAUDE.md, pinned connector) passes this whole step.
@@ -435,14 +482,15 @@ jobs:
           # So `-1A` closes the one-sided case AND feeds the dot-entry to the
           # per-bot assertions; the set comparison alone cannot catch a ghost
           # that is present on both sides, and is not what is relied on for it.
-          # FIVE distinguishable states, and each gets its own message. The
+          # FIVE distinguishable states, and each gets its OWN message. The
           # listing is SPLIT from the sort rather than piped, because a pipeline
-          # conflates three of them into one status:
-          #   1. docker/daemon failure          -> `docker run` non-zero
-          #   2. /app/bots absent               -> `ls -1A` exits 2
+          # takes only the rightmost status and conflates them:
+          #   1. no image / daemon unreachable  -> the inspect below
+          #   2. /app/bots absent               -> `ls -1A` exits non-zero
           #   3. present but empty              -> exit 0, no output
           #   4. present, set mismatch          -> the comparison below
           #   5. present, set matches           -> the per-bot loop below
+          #
           # A previous round reached for `set -o pipefail` here instead. It was
           # inert for the pipeline its comment named (the per-bot `docker run |
           # jq`: jq is rightmost and already exits non-zero on bad input,
@@ -452,12 +500,36 @@ jobs:
           # with no `::error::` annotation at all. State 2 is reachable:
           # muninn's Dockerfile COPYs `bot[s]` as an OPTIONAL glob, so a second
           # exclusion added upstream to `.dockerignore` passes the `grep -q`
-          # strip below and yields an image with no /app/bots.
-          if ! RAW=$(docker run --rm --entrypoint sh "$IMG" -c 'ls -1A /app/bots'); then
-            echo "::error::could not list /app/bots in the image — docker failed, or the directory is absent (the Dockerfile COPYs bots/ through an optional glob, so an image without it builds green)"; exit 1
-          fi
+          # strip above and yields an image with no /app/bots.
+          #
+          # The round AFTER that one wrote this comment claiming five messages
+          # and shipped four: `if ! RAW=$(docker run …)` discards the status, so
+          # states 1 and 2 shared one. They are the two whose diagnosis differs
+          # most — "your daemon is broken" versus "go read upstream's
+          # .dockerignore" — so they are separated here by asking about the
+          # image FIRST. Deliberately not by branching on docker's exit code: a
+          # missing image is 125 but an unreachable daemon is 1, so an exit-code
+          # case would have misfiled the very state it was added to name.
+          [ -n "$IMG" ] || {
+            echo "::error::nais/docker-build-push produced no image reference — the non-push call is expected to set outputs.image"; exit 1
+          }
+          docker image inspect "$IMG" > /dev/null 2>&1 || {
+            echo "::error::docker cannot inspect $IMG — the daemon is unreachable, or the build did not load the image locally"; exit 1
+          }
+          RAW=$(docker run --rm --entrypoint sh "$IMG" -c 'ls -1A /app/bots') || {
+            echo "::error::/app/bots is absent from the image — the Dockerfile COPYs bots/ through an optional glob, so an image without it builds green"; exit 1
+          }
           GOT=$(printf '%s\n' "$RAW" | sort)
-          WANT=$(ls -1A deploy/bots | sort)
+          # Same split, same reason, and it is NOT dead symmetry: `ls | sort`
+          # here would report a missing deploy/bots as "not this repo's bot set"
+          # (ls exits 2, sort exits 0, WANT empty). The -d check three steps
+          # earlier makes that unreachable today — but leaving the shape intact
+          # teaches the next reader that the shape is fine, which is how the
+          # line above got written.
+          WANT_RAW=$(ls -1A deploy/bots) || {
+            echo "::error::could not list deploy/bots — the checkout is not what this workflow expects"; exit 1
+          }
+          WANT=$(printf '%s\n' "$WANT_RAW" | sort)
           echo "want: $WANT"
           echo "got:  $GOT"
           [ -n "$GOT" ] || { echo "::error::/app/bots is empty — the overlay did not land"; exit 1; }
