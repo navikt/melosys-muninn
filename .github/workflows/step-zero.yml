@@ -1,0 +1,157 @@
+name: step-zero
+
+# Builds the WebSocket echo image from build/echo/, pushes it to the team's
+# GAR, and applies nais/step-zero/stub.yaml — the whole of step zero in one
+# dispatch. See docs/step-zero-websocket.md for what it proves and why it runs
+# before the expensive half of procurement.
+#
+# WHY THIS IS A SECOND WORKFLOW RATHER THAN A HAND-RUN COMMAND. An earlier
+# draft of the runbook told the operator to apply the stub by hand:
+#
+#     RESOURCE=nais/step-zero/stub.yaml VARS=... CLUSTER=dev-gcp nais/deploy
+#
+# That is not runnable and never was. `nais/deploy` is a GitHub Action path
+# (nais/deploy/actions/deploy@v2, as deploy.yml uses it), not a binary; a shell
+# resolves the slash as a PATH and answers `no such file or directory`, exit
+# 127. The installed `nais` CLI has no `deploy` subcommand at all, and its
+# `apply` takes no --vars-file, so it cannot render this file's `{{ }}` tokens.
+# Measured 2026-08-29.
+#
+# The second half of that mistake is the one worth remembering: the runbook
+# said "with the deploy identity already authenticated (§9)", but §9's identity
+# is `id-token: write` federated INSIDE GitHub Actions. There is no credential
+# a human at a laptop holds. So the fix is not a corrected command — there is
+# no command — it is running step zero where the identity exists.
+#
+# This is still "outside the placeholder-guarded workflow" in the sense the
+# plan means: deploy.yml refuses while any REPLACE_ME survives in vars-q2.json,
+# and `gcp_project` / `vertex_region` are still placeholders at this point in
+# the schedule. This workflow reads vars-step-zero.json instead, which carries
+# only the values §1–§4 already bought.
+#
+# `workflow_dispatch` ONLY, for the same reason deploy.yml is: a pull request
+# from a fork can then never run it and never sees a secret.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster:
+        description: "nais cluster"
+        required: true
+        default: dev-gcp
+        type: choice
+        options: [dev-gcp]
+
+# WORKFLOW level, not job level — same reason as deploy.yml: every nais/login
+# and nais/deploy needs `id-token: write`, and a job added later would silently
+# get none.
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  step-zero:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # vars-step-zero.json is NOT covered by deploy.yml's guard — that one
+      # reads vars-q2.json. Without this check the placeholder reaches the
+      # cluster as an image reference and the pod goes ImagePullBackOff, which
+      # build/echo/Dockerfile's own header notes "reads like a registry
+      # permission problem" — i.e. the operator escalates a procurement item
+      # that is not broken.
+      #
+      # Same jq shape as deploy.yml's guard, and for the same measured reasons:
+      # `-s` + `length == 1` because a concatenated JSON stream is individually
+      # clean per document, and the VALUES never cross into the shell — only
+      # the names of offending keys do. Archaeology: docs/pipeline-guards.md.
+      - name: vars-step-zero.json is one object with no placeholder left
+        run: |
+          jq -e -s 'length == 1 and (.[0] | type == "object")' nais/step-zero/vars-step-zero.json > /dev/null || {
+            echo "::error::vars-step-zero.json is not exactly one JSON object (empty, unreadable, malformed, or two documents concatenated)"; exit 1
+          }
+
+          UNFILLED=$(jq -r '
+            to_entries
+            | map(select(.key | startswith("_") | not))
+            | map(select(.value | tostring | test("REPLACE_ME")))
+            | map(.key) | join(", ")
+          ' nais/step-zero/vars-step-zero.json)
+          if [ -n "$UNFILLED" ]; then
+            echo "::error::vars-step-zero.json still has placeholders: $UNFILLED — see docs/PREREQUISITES.md §1-§4"; exit 1
+          fi
+
+      # `team` decides which GAR the image is pushed to, and vars-step-zero.json
+      # carries its own copy for the manifest's labels. Reading it from the file
+      # rather than hardcoding it is deploy.yml's rule and the reason is the
+      # same: a hardcoded copy beside the file's own value would push to one
+      # team's registry and label the app with another.
+      #
+      # The value crosses into $GITHUB_ENV, so its shape is checked first —
+      # exactly deploy.yml's predicate, exact-field through jq.
+      - name: Read the team from the vars file
+        run: |
+          BAD=$(jq -r '
+            . as $doc
+            | ["team"]
+            | map(select(
+                ($doc[.] | type) != "string"
+                or $doc[.] == "null"
+                or ($doc[.] | test("\\A[a-z0-9]([a-z0-9-]*[a-z0-9])?\\z") | not)
+              ))
+            | join(", ")
+          ' nais/step-zero/vars-step-zero.json)
+          if [ -n "$BAD" ]; then
+            echo "::error::not a usable value in vars-step-zero.json: $BAD — expected lowercase letters, digits and inner hyphens only"; exit 1
+          fi
+          echo "TEAM=$(jq -r '.team' nais/step-zero/vars-step-zero.json)" >> "$GITHUB_ENV"
+
+      # The echo image lands in the SAME repo-named GAR path as the muninn
+      # image (nais/docker-build-push names the image after this repository) and
+      # is told apart by its tag. That is deliberate: distinguishing it by name
+      # would mean depending on an `image_suffix`-style input this repo has not
+      # verified against the action's own surface, and a wrong input name fails
+      # in a way no guard here would catch. A tag is checked by reading it back
+      # in the deploy step below.
+      #
+      # This also removes the `--platform linux/amd64` trap the by-hand build
+      # carried: a runner is amd64, so an arm64 image — the default on the Mac
+      # this repo is authored on — cannot be produced here at all.
+      - name: Build and push the echo image
+        id: echo-push
+        uses: nais/docker-build-push@v0
+        with:
+          team: ${{ env.TEAM }}
+          docker_context: ./build/echo
+          tag: echo-${{ github.sha }}
+
+      # `outputs.image` is the pushed reference WITH the `@sha256:…` digest the
+      # action appends on a push call — the same value deploy.yml wires into its
+      # own deploy, and for the same reason: a tag can be overwritten, a digest
+      # cannot, and step zero is worth nothing if the pod under test is not the
+      # image this run built.
+      - name: The pushed reference must be a digest-pinned image
+        run: |
+          IMG='${{ steps.echo-push.outputs.image }}'
+          case "$IMG" in
+            *@sha256:*) echo "echo image: $IMG" ;;
+            "") echo "::error::nais/docker-build-push produced no image reference"; exit 1 ;;
+            *) echo "::error::pushed reference is not digest-pinned: $IMG"; exit 1 ;;
+          esac
+
+      - name: Apply the step-zero stub
+        uses: nais/deploy/actions/deploy@v2
+        env:
+          CLUSTER: ${{ inputs.cluster }}
+          RESOURCE: nais/step-zero/stub.yaml
+          VARS: nais/step-zero/vars-step-zero.json
+          # `echo_image` is supplied HERE rather than checked into the vars
+          # file. The reference is not knowable until the push above has run,
+          # and a checked-in copy was a REPLACE_ME that nothing guarded — the
+          # ImagePullBackOff-that-reads-as-a-permission-problem above.
+          #
+          # ONE comma-separated input even at a single value, matching
+          # deploy.yml: two `VAR:` keys in one `env:` mapping is a YAML error at
+          # best and last-one-wins at worst.
+          VAR: "echo_image=${{ steps.echo-push.outputs.image }}"

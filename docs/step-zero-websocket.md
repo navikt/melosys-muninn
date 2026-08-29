@@ -36,8 +36,8 @@ So the sequence is:
 
 1. Buy §1–§4 (app registration + consent + group + the two ingresses).
 2. Deploy a **stub** `Application` — same `app_name`, same `azure` block, same
-   sidecar settings and ingresses, applied with `nais/deploy` **outside** the
-   placeholder-guarded deploy workflow.
+   sidecar settings and ingresses — by dispatching `.github/workflows/step-zero.yml`,
+   which is **outside** the placeholder-guarded deploy workflow.
 3. Only then can the upgrade be attempted end to end.
 
 **It must be a stub, and it must be a WebSocket echo server.** Two shortcuts
@@ -51,30 +51,49 @@ look available here and neither is:
 - *"Any hello-world image will do."* No: a plain HTTP server answers an upgrade
   request as an ordinary request, which is one of the failure signatures below.
   A hello-world stub reports the very failure it is meant to detect. It has to
-  echo, which means an image in an allowed registry — a one-off build pushed to
-  the team GAR, or a third-party image mirrored there. That is a real cost.
+  echo, which means an image in an allowed registry — the team GAR.
+  `step-zero.yml` builds and pushes it; that is still a real cost in a build and
+  a stored image, it is just not a manual one.
 
 **Both artifacts are in this repo — you do not have to write them.**
 
 | What | Where |
 |---|---|
-| The echo server + its Dockerfile | `build/echo/` — build and push it BY HAND, per that Dockerfile's header. Not through the deploy workflow, which builds muninn and refuses to run while `vars-q2.json` holds a `REPLACE_ME`. |
-| The stub `Application` | `nais/step-zero/stub.yaml` + `nais/step-zero/vars-step-zero.json` — eight values, all of them already needed for §1–§4, plus the pushed echo image reference. |
+| The echo server + its Dockerfile | `build/echo/` |
+| The stub `Application` | `nais/step-zero/stub.yaml` + `nais/step-zero/vars-step-zero.json` |
+| The thing that runs them | `.github/workflows/step-zero.yml` |
 
-Applied with `nais/deploy` directly, e.g.
+**How to run it: fill `nais/step-zero/vars-step-zero.json`, then dispatch
+`step-zero` from the Actions tab.** One dispatch builds the echo image, pushes
+it to the team GAR and applies the stub.
 
-```bash
-# from a checkout, with the deploy identity already authenticated (§9)
-RESOURCE=nais/step-zero/stub.yaml VARS=nais/step-zero/vars-step-zero.json \
-  CLUSTER=dev-gcp nais/deploy
-```
+There is **no by-hand path, and do not go looking for one.** An earlier draft of
+this page gave a command — `RESOURCE=… VARS=… CLUSTER=dev-gcp nais/deploy` —
+and it was wrong twice over. `nais/deploy` is a *GitHub Action* path
+(`nais/deploy/actions/deploy@v2`), not a binary: a shell resolves the slash as a
+path and answers `no such file or directory`, exit 127. The installed `nais`
+CLI has no `deploy` subcommand at all, and its `apply` takes no `--vars-file`,
+so it cannot render this manifest's `{{ }}` tokens. And the identity that draft
+told you to authenticate — §9's — is `id-token: write` federated **inside GitHub
+Actions**; no human holds a credential for it. Step zero runs where the identity
+already is.
 
-The five values `stub.yaml` shares with `../app.yaml` — `app_name`,
-`namespace`, `team`, `tenant`, `group_muninn_bruker` and both ingresses — must
-be **identical in both vars files**, or step zero proves the upgrade for a
-different app than the one that is deployed. Nothing checks that for you: they
-are separate files precisely so step zero need not wait on `gcp_project` and
-`vertex_region`, and the cost of that is a copy nobody compares.
+`step-zero.yml` is separate from `deploy.yml` for one reason: `deploy.yml`
+refuses while any `REPLACE_ME` survives in `vars-q2.json`, and `gcp_project` /
+`vertex_region` are still placeholders at this point in the schedule.
+`step-zero.yml` reads `vars-step-zero.json` instead, which carries only what
+§1–§4 already bought.
+
+**The seven values in `vars-step-zero.json` are a subset of `vars-q2.json`, and
+must be identical in both files** — `app_name`, `namespace`, `team`, `tenant`,
+`group_muninn_bruker` and the two ingresses. Nothing compares the two files for
+you; they are separate precisely so step zero need not wait on `gcp_project` and
+`vertex_region`, and the cost of that is a copy nobody checks. Get one wrong and
+step zero proves the upgrade for a different app than the one that is deployed.
+
+The echo image reference is **not** one of them — it does not exist until the
+workflow's own build has run, which is why the workflow hands it to
+`nais/deploy` rather than reading it from the file.
 
 The stub is **replaced** by the first real deploy — same `app_name`, so it is
 an update rather than a second Application.
@@ -97,28 +116,49 @@ domains. What you are looking for, in order:
 - **101 Switching Protocols.** A 401 means the token did not arrive; a 200 with
   an HTML body means something in the path answered the upgrade as an ordinary
   request.
-- **The socket stays open past ~60s.** An ingress that closes idle upgrades
-  turns every long turn into a dropped answer. muninn's client retries in ~2 s,
-  but the turn in flight does not come back.
+- **The socket survives past ~60s with no application traffic.** An ingress that
+  closes long-lived upgrades turns every long turn into a dropped answer.
+  muninn's client retries in ~2 s, but the turn in flight does not come back.
+
+  Read that bullet precisely: it is **not** a test of a fully idle TCP
+  connection, and cannot be. Bun's WebSocket server auto-pings at roughly half
+  its `idleTimeout` (120 s by default, set or unset), the browser auto-pongs,
+  and that traffic resets nginx's `proxy_read_timeout`. So what you are proving
+  is "a socket lives past 60 s carrying only protocol keepalives" — which is
+  exactly the property production has, because real muninn is also `Bun.serve`
+  with the same default. A stub that disabled keepalives would test something
+  the real app never does.
+
 A third check — *a turn completes over it*, a message in and a streamed reply
 out — is **not** part of step zero. An echo stub cannot answer one, and it needs
 the model and the database, i.e. everything step zero exists to avoid buying
 first. It belongs to acceptance, after the first real deploy.
 
-## The three ways this fails that are not the ingress
+## The ways this fails that are not the ingress
 
-Worth ruling out before blaming the proxy:
+Rule these out before blaming the proxy. **They are about the STUB** — an
+earlier draft of this list described muninn instead, which is worse than no
+list: it would have you checking a variable and a model credential that step
+zero does not deploy, at the exact moment the transport really had failed.
 
-1. **`MUNINN_ALLOWED_ORIGINS`.** The upgrade is origin-checked against the same
-   configured list as every write, using the same code (`decideOrigin` — there
-   is deliberately no second origin check in the WS path). If the origin of the
-   page you are on is not listed verbatim with its scheme, the handshake is
-   refused and the page otherwise looks fine. There are **two** origins here —
-   `intern` and `ansatt` — derived from the pair of ingress variables, so test
-   the socket from **both** domains. A single-origin list is a page that works
-   for whoever has naisdevice and fails silently for everyone else.
-2. **`Recreate` + one replica.** Every rollout drops every socket, by design.
-   A reconnect right after a deploy is not a bug.
-3. **The bot.** A socket that connects and then answers nothing is the model
-   credential (`PREREQUISITES.md` §7), not the transport. `/api/live` answering
-   200 tells you nothing about whether a turn can complete.
+1. **You are not in the group.** `allowAllUsers: false` plus
+   `claims.groups` means the sidecar refuses the login itself, and a refused
+   login looks a lot like a refused upgrade. Confirm you land on the stub at all
+   before concluding anything about the socket.
+2. **The two vars files disagree.** `app_name` or an ingress differing between
+   `vars-step-zero.json` and `vars-q2.json` means the stub is proving the
+   upgrade for a different app than the one that will be deployed. Nothing
+   checks this; diff them.
+3. **`Recreate` + one replica.** Every rollout drops every socket, by design. A
+   reconnect right after a deploy is not a bug.
+4. **The image did not pull.** `ImagePullBackOff` reads like a registry
+   permission problem and usually is not. `step-zero.yml` now guards the
+   placeholder case and asserts the pushed reference is digest-pinned, so what
+   is left here is a genuine GAR permission question — `PREREQUISITES.md` §9.
+
+**Two things that are NOT on this list, deliberately**, because the stub has
+neither and reaching for them wastes the failure: `MUNINN_ALLOWED_ORIGINS`
+(`stub.yaml` has no `env:` and no `envFrom:`, and the echo server performs no
+origin check at all — it upgrades from any origin) and the model credential
+(there is no bot, no model and no `gcp.permissions` here). Both become real for
+the first *real* deploy, and both are in `PREREQUISITES.md` — §4 and §7.

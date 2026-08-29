@@ -1,23 +1,25 @@
 # Step zero's WebSocket echo image — see docs/step-zero-websocket.md.
 #
-# BUILD AND PUSH IT BY HAND, not through .github/workflows/deploy.yml. That
-# workflow builds MUNINN at a pinned ref with this repo's bot folder overlaid,
-# and refuses to run while any REPLACE_ME survives in vars-q2.json — which is
-# still the state of the world when step zero runs. The two have nothing in
-# common but a registry.
+# YOU DO NOT BUILD THIS BY HAND. `.github/workflows/step-zero.yml` builds it,
+# pushes it to the team GAR and hands the digest-pinned reference straight to
+# nais/deploy. It is NOT built by .github/workflows/deploy.yml, which builds
+# MUNINN at a pinned ref with this repo's bot folder overlaid and refuses to run
+# while any REPLACE_ME survives in vars-q2.json — still the state of the world
+# when step zero runs. The two have nothing in common but a registry.
 #
-#   docker build -t <gar>/<team>/melosys-muninn-echo:step-zero build/echo
-#   docker push  <gar>/<team>/melosys-muninn-echo:step-zero
+# It must land in an ALLOWED registry — nais will not pull an arbitrary public
+# image — which is the real cost the plan prices step zero with.
 #
-# where <gar> is the team's Artifact Registry path from docs/PREREQUISITES.md
-# §9. It must land in an ALLOWED registry — nais will not pull an arbitrary
-# public image — which is the real cost the plan prices step zero with.
-# Put the resulting reference in nais/step-zero/vars-step-zero.json as
-# `echo_image`.
+# For LOCAL debugging only (a runner is amd64; `--platform` is not optional on
+# the arm64 Mac this repo is authored on, and an arm64 image in GAR is an
+# ImagePullBackOff that reads like a registry permission problem):
 #
-# `--platform linux/amd64` if you build this on an arm64 Mac: nais runs amd64,
-# and an arm64 image is an ImagePullBackOff that reads like a registry
-# permission problem.
+#   docker build --platform linux/amd64 -t echo-local build/echo
+#   docker run --rm -p 3000:3000 echo-local
+#
+# Do not push a hand-built image and wire its reference into
+# nais/step-zero/vars-step-zero.json. There is no `echo_image` key there any
+# more, deliberately: it was a placeholder no guard covered.
 FROM oven/bun:1-debian
 
 WORKDIR /app

@@ -2,11 +2,17 @@
 #
 # WHAT THIS IS FOR: proving that a WebSocket upgrade survives the dev-gcp
 # ingress controller AND the wonderwall sidecar, before the org buys Cloud SQL,
-# the GCP project or Vertex quota. It is applied by hand with `nais/deploy`,
-# OUTSIDE .github/workflows/deploy.yml — that workflow refuses to run while any
+# the GCP project or Vertex quota. It is applied by
+# .github/workflows/step-zero.yml, which also builds and pushes the echo image
+# — NOT by .github/workflows/deploy.yml, which refuses to run while any
 # REPLACE_ME survives in vars-q2.json, and `gcp_project` and `vertex_region`
 # are still placeholders at this point in the schedule. That refusal is correct;
-# this file is how step zero happens anyway.
+# the second workflow is how step zero happens anyway.
+#
+# It is not applied BY HAND, and an earlier draft of this header said it was.
+# There is no hand path: `nais/deploy` is an Action path, not a binary, and the
+# deploy identity is federated inside Actions — no human holds a credential for
+# it. See that workflow's header for the measurement.
 #
 # THREE THINGS ARE COPIED VERBATIM FROM ../app.yaml AND MUST STAY THAT WAY,
 # because they are the things under test:
@@ -42,7 +48,10 @@ spec:
   # muninn image cannot serve here either: its entrypoint runs under `set -eu`
   # and calls `bun db/require-provisioned.ts` BEFORE the server starts, so an
   # unprovisioned pod exits rather than degrading.
-  # Build and push it with build/echo/ — see that Dockerfile's header.
+  # Built and pushed by .github/workflows/step-zero.yml, which hands the
+  # digest-pinned reference to nais/deploy as `VAR: echo_image=…`. It is
+  # deliberately NOT a value in vars-step-zero.json: the reference does not
+  # exist until that build has run.
   image: {{ echo_image }}
 
   # Must match the PORT the echo server binds (build/echo/server.ts reads
@@ -78,7 +87,15 @@ spec:
       enabled: true
       autoLogin: true
       autoLoginIgnorePaths:
+        # All FOUR entries, matching ../app.yaml exactly. `/api/ready` is here
+        # even though this stub's own readiness probe is on /api/live and the
+        # echo server serves nothing at /api/ready: the entry is what is under
+        # test, not what answers behind it. It was omitted once, which made the
+        # "copied verbatim" claim above false in three places at once and left
+        # the real app's readiness path — which DOES depend on this entry —
+        # proven by nothing.
         - /api/live
+        - /api/ready
         - /favicon.svg
         - /favicon.ico
 
