@@ -147,15 +147,21 @@ on each step because getting the middle one wrong fails *silently*:
 1. Declare the instance in the manifest and apply it.
 2. Superuser reset (the `navikt/kbs-guide` procedure).
 3. `CREATE EXTENSION vector` — **elevated role, this step only.**
-4. Apply `db/init.sql` — **as the app user.** If the elevated role runs it, the
+4. `bun db/provision.ts --yes` — **as the app user.** Applies `db/init.sql` and
+   baselines in one command, from the image (muninn #486; the pinned muninn ref
+   must contain it). If the elevated role runs it, the
    app user ends up without ownership of ~20 tables and the pod gets
    permission-denied at first query rather than a clear schema error.
-5. `bun db/migrate.ts --baseline` — **app user**; mark-applied, *not* apply, or
-   migrations 006–074 re-run over the consolidated schema.
+
+Step 4 is two things in one command: apply the consolidated schema, then
+*mark-applied* every shipped migration. Without the second half, migrations 006
+onwards re-run over a schema that already carries them and the pod crash-loops.
 
 The entrypoint attempts none of these. It refuses an unprovisioned *and* an
 unbaselined database and prints remedies that are executable in the state that
-prints them.
+prints them — which became true with muninn #486; before it, the remedy for an
+empty database named `psql`, which the image does not ship and which no machine
+can run against a private-IP instance.
 
 Sequencing note: the instance does not exist until the manifest is applied, so
 either deploy once expecting a crash-loop, or scale to zero replicas first.
