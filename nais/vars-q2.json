@@ -1,5 +1,5 @@
 {
-  "_comment": "Every REPLACE_ME below is a value only the team can supply — see docs/PREREQUISITES.md. The deploy workflow refuses to run while any of them survives, so a half-filled file fails loudly instead of deploying something wrong.",
+  "_comment": "Every REPLACE_ME below is a value only the team can supply — see docs/PREREQUISITES.md. The deploy workflow refuses to run while any of them survives, so a half-filled file fails loudly instead of deploying something wrong. NB the guard reads the VALUES of keys that do not start with an underscore, so a comment may say REPLACE_ME (this one does) — but a comment stored under a NORMAL key would refuse every deploy. Keep documentation under `_`-prefixed keys.",
 
   "app_name": "melosys-muninn-q2",
   "namespace": "REPLACE_ME_namespace",

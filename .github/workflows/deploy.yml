@@ -111,10 +111,24 @@ jobs:
       # was already assigned while the image bakes the unassigned one.
       # ---------------------------------------------------------------------
 
+      # Over the VALUES of the real keys, not a `grep` over the file. A grep also
+      # reads the `_comment*` keys, which say the word REPLACE_ME while
+      # explaining it — so the shipped grep refused a CORRECTLY FILLED vars file
+      # and would have done so forever. Measured before this line was written:
+      # every value filled in, guard still exited 1 on two comment strings.
+      #
+      # Keys beginning `_` are documentation and are skipped. The message names
+      # WHICH values are missing, which a grep could not.
       - name: No placeholder survives in the vars file
         run: |
-          if grep -n "REPLACE_ME" deploy/nais/vars-q2.json; then
-            echo "::error::vars-q2.json still has placeholders — see docs/PREREQUISITES.md"; exit 1
+          UNFILLED=$(jq -r '
+            to_entries
+            | map(select(.key | startswith("_") | not))
+            | map(select(.value | tostring | test("REPLACE_ME")))
+            | map(.key) | join(", ")
+          ' deploy/nais/vars-q2.json)
+          if [ -n "$UNFILLED" ]; then
+            echo "::error::vars-q2.json still has placeholders: $UNFILLED — see docs/PREREQUISITES.md"; exit 1
           fi
 
       # The project and the region would otherwise live in FOUR places that
@@ -264,7 +278,7 @@ jobs:
             WITH_MEDIA=false
             WITH_CLI=false
             WITH_EMBEDDINGS=true
-          push_image: false
+          push_image: "false"
           outputs: type=docker
 
       # Acceptance D1. The bot check asserts the EXACT SET, not "contains": too
