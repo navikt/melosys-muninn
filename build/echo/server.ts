@@ -126,7 +126,8 @@ Bun.serve({
     //  - `websocket.idleTimeout` DOES govern this, as the second row shows. The
     //    SERVER-level `idleTimeout` does not, and conflating the two is what
     //    made the previous comment wrong: muninn sets `idleTimeout: 255` at the
-    //    server level (src/index.ts, ref 21b436b, for SSE) and sets no
+    //    server level (src/index.ts:262, re-verified at ref fb5e6b5d, for SSE)
+    //    and sets no
     //    `websocket.idleTimeout` at all. So this stub and muninn's socket run
     //    the SAME default, parity holds, and the round-8 comment that said so
     //    was right — it was the round-9 "correction" that was wrong.

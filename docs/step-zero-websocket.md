@@ -136,7 +136,7 @@ domains. What you are looking for, in order:
   that timescale; do not go looking for one.
 
   **And the stub matches muninn here.** muninn sets `idleTimeout: 255` at the
-  *server* level (`src/index.ts`, ref `21b436b`, for SSE) and sets no
+  *server* level (`src/index.ts:262`, re-verified at ref `fb5e6b5d`, for SSE) and sets no
   `websocket.idleTimeout` — and the second row shows the websocket-level value
   is the one that governs. So both run Bun's websocket default and whatever the
   ingress does to this socket it will do to muninn's. An earlier revision of

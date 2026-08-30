@@ -388,7 +388,7 @@ jobs:
           # Specifically from `rm -rf`, not `mkdir -p`, and round 9's first
           # correction named the wrong one of the two. `actions/checkout` of
           # public muninn always leaves `muninn/bots` present — `git ls-tree
-          # 21b436b bots/` returns `bots/CLAUDE.md` and `bots/jarvis` — so the
+          # fb5e6b5d bots/` returns `bots/CLAUDE.md` and `bots/jarvis` — so the
           # `rm` always has something to remove and is always the line that
           # fails. The fixture that produced the wrong answer had no
           # `muninn/bots` in it: the same un-representative shape the method

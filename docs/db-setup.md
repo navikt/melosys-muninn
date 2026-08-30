@@ -46,12 +46,29 @@ input, because the workflow pins a muninn ref and **that ref must contain
 #486**. Public muninn carries no tags, so the first deploy pins a commit SHA;
 any SHA at or after `21b436b` has it.
 
-⚠️ **Pass the FULL 40 characters.** The deploy workflow's ref guard accepts a
-tag that really exists upstream, or a 40-hex commit SHA, and nothing else — an
+⚠️ **`21b436b` is the FLOOR, not the value to dispatch.** Two different things,
+and conflating them pins the pod to a commit that was current in August:
+
+- the **floor** is `21b436be9b66f8614bb84ef8f4352b6416f8d99c` — any ref at or
+  after it carries `db/provision.ts`, and a ref before it does not;
+- the **dispatch value** is whatever public muninn's `main` is when you deploy.
+
+⚠️ **Pass the FULL 40 characters** either way. The ref guard accepts a tag that
+really exists upstream, or a 40-hex commit SHA, and nothing else — an
 abbreviated one is refused with *"neither a tag … nor a full 40-character
-commit SHA"*. `21b436b` is written short here because that is how a commit is
-named in prose; the dispatchable value is
-`21b436be9b66f8614bb84ef8f4352b6416f8d99c`.
+commit SHA"*. `21b436b` is written short in prose because that is how a commit
+is named; it is never what you paste.
+
+Get the current value with:
+
+```bash
+git ls-remote https://github.com/<owner>/muninn main
+```
+
+As of 2026-08-30 that is `fb5e6b5dcba98c0b5dfb2a540405ac677881d2de` (muninn
+#494), verified a descendant of the floor with `git merge-base --is-ancestor`.
+Re-read it rather than pasting that one: the deploy names the commit it
+shipped, so a stale value here silently deploys a stale muninn.
 
 The alternative — `kubectl debug` onto an image carrying `postgresql-client` —
 was rejected because it needs a psql image in an allowed registry AND the
