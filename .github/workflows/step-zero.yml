@@ -167,15 +167,20 @@ jobs:
           CLUSTER: ${{ inputs.cluster }}
           RESOURCE: nais/step-zero/stub.yaml
           VARS: nais/step-zero/vars-step-zero.json
-          # nais/deploy defaults WAIT to false, which for THIS workflow is
-          # self-defeating: the run would go green before the pod is scheduled,
-          # so the ImagePullBackOff that the echo_image handling above exists to
-          # stop anyone misdiagnosing would not appear in the run at all. Step
-          # zero is an observation; wait for it.
+          # EXPLICIT, NOT REQUIRED — and the comment that used to be here was
+          # wrong. `WAIT` does default to true: the CLI's own default is false
+          # (pkg/deployclient/config.go), but the ACTION does not run the CLI
+          # bare — nais/deploy@v2 is a docker action whose
+          # actions/deploy/entrypoint.sh does `if [ -z "$WAIT" ]; then export
+          # WAIT="true"; fi`. Verified against upstream source 2026-08-30.
           #
-          # deploy.yml does not set this and keeps the default. That is a gap
-          # there too, not a difference in kind — recorded as a follow-up rather
-          # than changed in a commit that is not reviewing that file.
+          # Kept anyway, because step zero is an observation and the whole
+          # echo_image handling above is about surfacing an ImagePullBackOff
+          # rather than misdiagnosing it — so the property is worth stating at
+          # the call site rather than inheriting silently. It is a no-op.
+          #
+          # The earlier comment also recorded a follow-up saying deploy.yml has
+          # "the same gap". There is no gap; do not act on it.
           WAIT: "true"
           # `echo_image` is supplied HERE rather than checked into the vars
           # file. The reference is not knowable until the push above has run,

@@ -126,20 +126,23 @@ domains. What you are looking for, in order:
 
   | | first server PING | closed |
   |---|---|---|
-  | this stub (no `idleTimeout`) | t=102.5 s | t=118.5 s |
-  | a server with `idleTimeout: 255` | t=104.0 s | t=120.0 s |
+  | the stub, as shipped | t=104.0 s | t=120.0 s |
+  | + `websocket.idleTimeout: 255` | none | still open past t=150 s |
 
   Nothing is sent in either direction between the greeting at t=0 and that
-  first ping at ~102 s, so across the ~60 s window the connection is idle. If
-  the socket dies at 60 s, **that is the ingress**, and it is the single most
-  important result step zero can produce — do not go looking for a keepalive
-  explanation, there is none at that timescale.
+  first ping at ~104 s, so across the ~60 s window the connection is idle. If
+  the socket dies at 60 s, **that is the ingress** — the single most important
+  result step zero can produce. There is no keepalive explanation available at
+  that timescale; do not go looking for one.
 
-  Two things the earlier text got wrong, recorded so they are not restored: the
-  ping cadence is ~103 s in **both** columns and is not `idleTimeout/2` (which
-  would predict 60 s and 127.5 s), and muninn does **not** run the default —
-  `src/index.ts` sets `idleTimeout: 255` at ref `21b436b`. That server-level
-  value does not govern the socket, which is why both columns land together.
+  **And the stub matches muninn here.** muninn sets `idleTimeout: 255` at the
+  *server* level (`src/index.ts`, ref `21b436b`, for SSE) and sets no
+  `websocket.idleTimeout` — and the second row shows the websocket-level value
+  is the one that governs. So both run Bun's websocket default and whatever the
+  ingress does to this socket it will do to muninn's. An earlier revision of
+  this page denied that parity; it was conflating the two settings. The day
+  muninn sets `websocket.idleTimeout`, the parity breaks and nothing here will
+  notice.
 
 A third check — *a turn completes over it*, a message in and a streamed reply
 out — is **not** part of step zero. An echo stub cannot answer one, and it needs

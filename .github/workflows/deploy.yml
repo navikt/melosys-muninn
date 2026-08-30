@@ -378,11 +378,22 @@ jobs:
           # colleague. This repo's `bots/` is the whole set, not an addition.
           # Guarded, and round 8's Class-A sweep missed all three while
           # claiming to have enumerated every write in the file. `cp` failing
-          # was measured at rc 1 with ZERO annotations. These are also what a
-          # read-only `muninn/` hits FIRST — three lines before the mktemp
-          # below — which is why round 8's "with muninn/ read-only this one
-          # names it" was false: the step never reached the line it credited.
-          # It reaches an annotation now, from here.
+          # was measured at rc 1 with ZERO annotations.
+          #
+          # These are also what a read-only `muninn/` hits FIRST, well before
+          # the mktemp below — which is why round 8's "with muninn/ read-only
+          # this one names it" was false: the step never reached the line it
+          # credited. It reaches an annotation now, from here.
+          #
+          # Specifically from `rm -rf`, not `mkdir -p`, and round 9's first
+          # correction named the wrong one of the two. `actions/checkout` of
+          # public muninn always leaves `muninn/bots` present — `git ls-tree
+          # 21b436b bots/` returns `bots/CLAUDE.md` and `bots/jarvis` — so the
+          # `rm` always has something to remove and is always the line that
+          # fails. The fixture that produced the wrong answer had no
+          # `muninn/bots` in it: the same un-representative shape the method
+          # note in docs/pipeline-guards.md exists to prevent, on the commit
+          # that added the note.
           rm -rf muninn/bots || { echo "::error::could not clear muninn/bots — is the checkout read-only?"; exit 1; }
           mkdir -p muninn/bots || { echo "::error::could not create muninn/bots — is the checkout read-only?"; exit 1; }
           cp -R deploy/bots/. muninn/bots/ || { echo "::error::could not copy deploy/bots into the build context"; exit 1; }

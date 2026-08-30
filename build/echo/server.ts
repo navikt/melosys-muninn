@@ -60,10 +60,16 @@ Bun.serve({
   port: PORT,
   hostname: "0.0.0.0", // a container-local bind is unreachable to the kubelet
   // Bun's DEFAULT error page renders the throwing source file and its absolute
-  // filesystem path — measured at 67 808 bytes for the malformed-Host throw
-  // above. This handler replaces it for every throw, known or not, which is the
-  // class fix: `requestPath` closes the two states we found, this closes the
-  // ones we did not.
+  // filesystem path — measured at ~67 KB for the malformed-Host throw above,
+  // inside a base64 `binary/peechy` payload, which is why a plaintext grep of
+  // the body finds nothing and the first check for this said it was clean.
+  //
+  // This handler replaces that page for every throw the `fetch` handler
+  // returns from — `requestPath` closes the two states we found, this closes
+  // the ones we did not. Scoped deliberately: an earlier version claimed
+  // "EVERY throw", and a throw from `websocket.open` or `websocket.message`
+  // propagates out of `server.upgrade()` and KILLS THE PROCESS instead.
+  // Measured. Neither handler below can throw as written — keep it that way.
   error(err) {
     console.error("step-zero echo stub: unhandled error", err);
     return new Response("step-zero echo stub: internal error\n", {
@@ -102,28 +108,32 @@ Bun.serve({
     );
   },
   websocket: {
-    // No `websocket.idleTimeout` override. Two earlier comments here explained
-    // that choice and BOTH were wrong; what follows is only what was measured
-    // on the wire, decoding opcode 9 with a client that never pongs:
+    // No `websocket.idleTimeout` override. THREE earlier comments here
+    // explained that choice and all three were wrong, the last of them while
+    // correcting the other two. Only measurements now, taken on the wire by
+    // decoding opcode 9 with a client that never pongs:
     //
-    //   this stub (no idleTimeout):      first PING t=102.5s, closed t=118.5s
-    //   a server with idleTimeout: 255:  first PING t=104.0s, closed t=120.0s
+    //   this stub, as shipped          first PING t=104.0s, closed t=120.0s
+    //   + `websocket.idleTimeout: 255` no PING, no close — open past t=150s
     //
-    // Three things follow, and nothing beyond them is claimed:
-    //  - The first keepalive does not arrive until ~102 s, so across the
-    //    runbook's ~60 s window the connection is GENUINELY idle — zero frames
-    //    in either direction. An earlier comment said the opposite, twice.
-    //  - The cadence is ~103 s in both columns, i.e. NOT `idleTimeout/2`.
-    //    Do not restate that formula; it predicts 60 s and 127.5 s.
-    //  - The server-level `idleTimeout` does not govern the socket, which is
-    //    why both columns land in the same place. muninn does NOT run the
-    //    default here — src/index.ts sets `idleTimeout: 255` at ref 21b436b —
-    //    so the parity an earlier comment asserted was false as stated and
-    //    holds only because that value is not the one in play. If muninn ever
-    //    sets `websocket.idleTimeout`, this stub stops matching it and nothing
-    //    in this repo will notice.
+    // What follows from that, and nothing beyond it:
+    //  - The first keepalive is at ~104 s, so across the runbook's ~60 s window
+    //    the connection is GENUINELY idle, zero frames in either direction. A
+    //    socket that dies at 60 s is the INGRESS. One earlier comment claimed
+    //    the opposite, twice.
+    //  - ~104 s is not `idleTimeout/2` in any reading. Do not reintroduce that
+    //    formula.
+    //  - `websocket.idleTimeout` DOES govern this, as the second row shows. The
+    //    SERVER-level `idleTimeout` does not, and conflating the two is what
+    //    made the previous comment wrong: muninn sets `idleTimeout: 255` at the
+    //    server level (src/index.ts, ref 21b436b, for SSE) and sets no
+    //    `websocket.idleTimeout` at all. So this stub and muninn's socket run
+    //    the SAME default, parity holds, and the round-8 comment that said so
+    //    was right — it was the round-9 "correction" that was wrong.
+    //  - The day muninn sets `websocket.idleTimeout`, that parity breaks and
+    //    nothing in this repo will notice.
     //
-    // See docs/step-zero-websocket.md, which carries the same three facts.
+    // See docs/step-zero-websocket.md, which carries the same measurements.
     open(ws) {
       ws.send(`echo stub open at ${new Date().toISOString()}`);
     },
