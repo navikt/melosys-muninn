@@ -22,6 +22,36 @@
 
 const PORT = Number(process.env.PORT ?? 3000);
 
+/**
+ * The request path, for a request that may carry no `Host` header or a
+ * malformed one. Never throws.
+ *
+ * Two distinct states, and the second was missed by the fix for the first:
+ *  - NO Host — Bun sets `req.url` to the bare path ("/api/live"), which is not
+ *    an absolute URL, so a one-argument `new URL` throws.
+ *  - MALFORMED Host — Bun composes `http://<host><path>`, so the BASE IS NEVER
+ *    CONSULTED and `new URL(req.url, base)` throws anyway. Measured:
+ *    `Host: a b c` and `Host: [::zz` both produced
+ *    `TypeError: "http://a b c/api/live" cannot be parsed as a URL`.
+ *
+ * Both end the same way if they escape: /api/live 500s on a healthy pod, and
+ * /chat/ws answers a large HTML body instead of the 426 — which is the failure
+ * signature the runbook tells the operator to read as "something in the path
+ * answered the upgrade as an ordinary request". A stub that emits the signature
+ * it exists to detect is the hello-world mistake with extra steps.
+ */
+function requestPath(rawUrl: string): string {
+  try {
+    return new URL(rawUrl, "http://localhost").pathname;
+  } catch {
+    // Fall back to the raw request target: drop a `scheme://authority` prefix
+    // if one is present, then the query and fragment.
+    const afterAuthority = rawUrl.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/]*/, "");
+    const path = afterAuthority.split("?")[0].split("#")[0];
+    return path.startsWith("/") ? path : `/${path}`;
+  }
+}
+
 // The upgrade is accepted on ANY path. muninn's real socket is /chat/ws, and
 // the point of step zero is the ingress + sidecar leg, not the routing — but
 // checking it on /chat/ws specifically is free and is what the runbook says to
@@ -29,20 +59,25 @@ const PORT = Number(process.env.PORT ?? 3000);
 Bun.serve({
   port: PORT,
   hostname: "0.0.0.0", // a container-local bind is unreachable to the kubelet
+  // Bun's DEFAULT error page renders the throwing source file and its absolute
+  // filesystem path — measured at 67 808 bytes for the malformed-Host throw
+  // above. This handler replaces it for every throw, known or not, which is the
+  // class fix: `requestPath` closes the two states we found, this closes the
+  // ones we did not.
+  error(err) {
+    console.error("step-zero echo stub: unhandled error", err);
+    return new Response("step-zero echo stub: internal error\n", {
+      status: 500,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  },
   fetch(req, server) {
-    // The base is not optional. With no Host header — an HTTP/1.0 probe, an L4
-    // checker, an ingress default-backend probe, `curl --http1.0` — Bun sets
-    // `req.url` to the BARE PATH ("/api/live"), which is not an absolute URL,
-    // and a one-argument `new URL` throws. Measured over a raw socket: every
-    // path answered 500, including /api/live (a liveness failure on a healthy
-    // pod) and including /chat/ws, where it replaced the 426 body that is this
-    // file's entire reason to exist with an unexplained 500.
-    const url = new URL(req.url, "http://localhost");
+    const path = requestPath(req.url);
 
     // In autoLoginIgnorePaths, so this is reached with NO credential — which
     // is what the kubelet needs. Keep it trivial: a probe that touches
     // anything is a probe that can fail for a reason unrelated to the probe.
-    if (url.pathname === "/api/live") return new Response("ok");
+    if (path === "/api/live") return new Response("ok");
 
     if (server.upgrade(req)) return undefined; // 101; Bun writes the response
 
@@ -67,18 +102,28 @@ Bun.serve({
     );
   },
   websocket: {
-    // No `idleTimeout` override, and know what that does and does not buy.
-    // Omitting it does NOT leave the socket untimed: Bun's default is 120 s
-    // either way. What it buys is PARITY — real muninn is also `Bun.serve`
-    // with this same default, so whatever the ingress does to this socket it
-    // will do to that one.
+    // No `websocket.idleTimeout` override. Two earlier comments here explained
+    // that choice and BOTH were wrong; what follows is only what was measured
+    // on the wire, decoding opcode 9 with a client that never pongs:
     //
-    // It also means the runbook's "survives past ~60 s" check is not a test of
-    // an idle connection and cannot be: uWS auto-pings at ~idleTimeout/2, the
-    // browser auto-pongs, and that traffic resets nginx's `proxy_read_timeout`.
-    // Measured: 180 s with no application frames and the socket still open.
-    // Disabling keepalives to make it a true idle test would test something
-    // the real app never does. See docs/step-zero-websocket.md.
+    //   this stub (no idleTimeout):      first PING t=102.5s, closed t=118.5s
+    //   a server with idleTimeout: 255:  first PING t=104.0s, closed t=120.0s
+    //
+    // Three things follow, and nothing beyond them is claimed:
+    //  - The first keepalive does not arrive until ~102 s, so across the
+    //    runbook's ~60 s window the connection is GENUINELY idle — zero frames
+    //    in either direction. An earlier comment said the opposite, twice.
+    //  - The cadence is ~103 s in both columns, i.e. NOT `idleTimeout/2`.
+    //    Do not restate that formula; it predicts 60 s and 127.5 s.
+    //  - The server-level `idleTimeout` does not govern the socket, which is
+    //    why both columns land in the same place. muninn does NOT run the
+    //    default here — src/index.ts sets `idleTimeout: 255` at ref 21b436b —
+    //    so the parity an earlier comment asserted was false as stated and
+    //    holds only because that value is not the one in play. If muninn ever
+    //    sets `websocket.idleTimeout`, this stub stops matching it and nothing
+    //    in this repo will notice.
+    //
+    // See docs/step-zero-websocket.md, which carries the same three facts.
     open(ws) {
       ws.send(`echo stub open at ${new Date().toISOString()}`);
     },
