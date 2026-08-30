@@ -15,6 +15,31 @@ the best argument for not stating one.
 by extracting the step's `run:` body and executing it — except §2b and §4b,
 which are an ordering claim and a repo-history claim, verified with `git show`.
 
+## How to measure a guard here, and the two ways it has gone wrong
+
+Both of these produced a CONFIDENT, WRITTEN, FALSE claim in this repo. Neither
+was caught by review of the change; both were caught by someone re-running the
+measurement. If you are about to add a row below, read this first.
+
+1. **Extract the WHOLE `run:` body, with a YAML parser, and drive that.** Never
+   a slice of it, and never a retyped copy. Round 8 claimed a fix made a
+   read-only `muninn/` produce an annotation; it does not, because that state
+   dies at a `mkdir -p` three lines *above* the slice the harness started from.
+   The claim reached a commit message, a workflow comment and this page before
+   a reviewer drove the whole body and got `rc=1 ann=0` from both versions.
+2. **Build fixtures IN-PROCESS, and make each one isolate the property.** Not
+   through `$( )`, which strips a trailing newline before the fixture exists —
+   so the case you meant to test silently does not exist. And not a fixture
+   that fails for a second reason: a guard was once "proved" to refuse a newline
+   by a value that was refused for containing `=`. If a case passes, mutate the
+   fix and confirm that case flips. A test that cannot fail is not evidence.
+
+The corollary for prose: **a sentence asserting a mechanism belongs next to the
+measurement that produced it, or it does not belong here.** Four claims in this
+repo have now been wrong in the direction of sounding authoritative — twice
+about `idleTimeout`, once about which guard refuses a ghost folder, once about
+the read-only case above.
+
 ---
 
 ## 1. "No placeholder survives in the vars file"
@@ -116,7 +141,7 @@ is exactly ONE json object pinning `connector` to `copilot-sdk`,
 | `for e in $(find …)` | Word-splits a name containing a space, so the refusal named a truncated path. `find … > file` then `while IFS= read -r` — not `find … \| while`, whose subshell would swallow both the counter and the `exit 1`. The file comes from `mktemp` under `${RUNNER_TEMP:-/tmp}`, not a fixed `/tmp` path, which two concurrent dispatches on a shared-`/tmp` runner would truncate under each other — and not a `$$` suffix either, since separate PID namespaces sharing a `/tmp` mount hand out identical low PIDs. A `trap … EXIT` removes it; without one they accumulate per dispatch forever (measured: 3 runs, 3 files). `mktemp` failing is caught with an `::error::`, where a bare redirection died with none. |
 | `ls -1` on both sides of the image's exact-set assertion | Hid a dot-directory from the comparison **and** from the `for bot in $WANT` loop, so a ghost present only in the image passed. `ls -1A` closes that. Measured, and worth stating precisely: a ghost on BOTH sides still satisfies `GOT == WANT`, and the per-bot loop does **not** refuse it either unless it is malformed — a well-formed `.ghost/` (non-empty `CLAUDE.md`, pinned connector) passes the whole image step. What refuses the both-sides case is the **slug guard** in the bot-folder step — it has no row of its own in this table; it is the *"And the folder names"* paragraph below — which runs before the overlay. All three fixtures measured. |
 | `set -o pipefail` on the image listing | Added to improve an error message; it deleted one. `ls -1A` on a MISSING directory exits 2, so under `bash -e` the assignment aborted the step **before** `::error::/app/bots is empty` could print — pre-fix rc 1 WITH the annotation, post-fix rc 1 with none at all. And it was **inert for the pipeline its own comment named**: in the per-bot `docker run \| jq`, jq is rightmost and already exits non-zero, measured identical with and without. Do not reach for it here; split the commands instead. |
-| `if ! RAW=$(docker run … 'ls -1A /app/bots')` | **Discards the status, so it cannot tell three states apart.** The comment above it claimed five distinguishable states each with their own message; there were four, and the two merged were the two whose diagnosis differs most — "your daemon is broken" vs "go read upstream's `.dockerignore`". Ask `docker image inspect` FIRST, then let a failing `ls` mean one thing. Deliberately **not** an exit-code `case`: a missing image is 125 but an unreachable daemon is 1, so branching on the code misfiles the very state it was added to name. |
+| `if ! RAW=$(docker run … 'ls -1A /app/bots')` | **Discards the status, so two states it claimed to separate arrive as one.** The comment above it claimed five distinguishable states each with their own message; there were four, and the two merged were the two whose diagnosis differs most — "your daemon is broken" vs "go read upstream's `.dockerignore`". Ask `docker image inspect` FIRST, then let a failing `ls` mean one thing. Deliberately **not** an exit-code `case`: a missing image is 125 but an unreachable daemon is 1, so branching on the code misfiles the very state it was added to name. |
 | no `[ -n "$IMG" ]` before the assertions | With an empty image reference the whole step **passed**, asserting nothing about any artifact — measured against a shim. `outputs.image` on the non-push call being set is a documented assumption of `nais/docker-build-push@v0`, and an assumption a guard is built on has to be checked by that guard. |
 | `WANT=$(ls -1A deploy/bots \| sort)` | The same status conflation as the row above, on the other side of the comparison, left in place one line below where it had just been split apart. Unreachable today (`deploy/bots` is `-d`-checked three steps earlier) — recorded because leaving the shape intact is what teaches the next reader that the shape is fine, which is how it got written the first time. |
 | `grep -v '^bots/$' … > /tmp/di && mv /tmp/di …` | **The rest of the temp-file class, missed by the sweep that condemned `$$`.** Fixed `/tmp` path, no uniqueness, no `trap`, no `::error::`. Measured with `muninn/` at mode 500: rc 1, `Permission denied` on stderr, **zero annotations**, and `.dockerignore` left UNSTRIPPED so the overlay would not land. It survives `set -e` because `-e` is exempt for the non-final command of an `&&` list. Second defect in the same line: **`grep -v` exits 1 when it selects no lines** — a `.dockerignore` whose only entry is `bots/` — so the `&& mv` never ran, the exclusion survived, and the step died on the list's status with nothing printed. Treat exit 1 as a legitimate empty result and only >1 as an error. |

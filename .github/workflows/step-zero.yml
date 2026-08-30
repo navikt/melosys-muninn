@@ -108,12 +108,27 @@ jobs:
           echo "TEAM=$(jq -r '.team' nais/step-zero/vars-step-zero.json)" >> "$GITHUB_ENV"
 
       # The echo image lands in the SAME repo-named GAR path as the muninn
-      # image (nais/docker-build-push names the image after this repository) and
-      # is told apart by its tag. That is deliberate: distinguishing it by name
-      # would mean depending on an `image_suffix`-style input this repo has not
-      # verified against the action's own surface, and a wrong input name fails
-      # in a way no guard here would catch. A tag is checked by reading it back
-      # in the deploy step below.
+      # image — nais/docker-build-push names the image after this repository —
+      # rather than depending on an `image_suffix`-style input this repo has not
+      # verified against the action's own surface, where a wrong input name
+      # fails in a way no guard here would catch.
+      #
+      # ⚠️ Read what that costs, because an earlier version of this comment got
+      # it wrong twice. Nothing below reads a tag back; the assertion checks
+      # only that the reference is digest-pinned. And `tag:` is NOT what
+      # `outputs.image` carries: the action's metadata step emits a
+      # `type=sha,prefix={{date}}-` tag at priority 9002 alongside this raw one
+      # at 9001, and `image-ref` takes the highest-priority tag — so the
+      # reference is `…:<date>-<sha7>@sha256:…`.
+      #
+      # Consequence, accepted and recorded rather than fixed: the echo and app
+      # images share one GAR repository AND that date-sha tag namespace, both
+      # keyed on the same `github.sha`. A step-zero and a deploy dispatch in the
+      # same minute on the same commit make the second push move that tag, so
+      # the human-readable tag can name the echo stub. Every DEPLOY is
+      # digest-pinned, so nothing runs the wrong image — but on a public repo
+      # the tag an operator reads to identify a build can lie. The fix is a
+      # separate image name once the action's input for it is verified.
       #
       # This also removes the `--platform linux/amd64` trap the by-hand build
       # carried: a runner is amd64, so an arm64 image — the default on the Mac
@@ -132,8 +147,14 @@ jobs:
       # cannot, and step zero is worth nothing if the pod under test is not the
       # image this run built.
       - name: The pushed reference must be a digest-pinned image
+        # Through `env:`, not interpolated into the body. deploy.yml passes this
+        # exact value that way at all three of its assertion steps; this file
+        # broke the convention on its first step, and a `'` in the value would
+        # close the quote and run the rest as shell. Bounded by who may
+        # workflow_dispatch, but it was the file's one injection surface.
+        env:
+          IMG: ${{ steps.echo-push.outputs.image }}
         run: |
-          IMG='${{ steps.echo-push.outputs.image }}'
           case "$IMG" in
             *@sha256:*) echo "echo image: $IMG" ;;
             "") echo "::error::nais/docker-build-push produced no image reference"; exit 1 ;;
@@ -146,6 +167,16 @@ jobs:
           CLUSTER: ${{ inputs.cluster }}
           RESOURCE: nais/step-zero/stub.yaml
           VARS: nais/step-zero/vars-step-zero.json
+          # nais/deploy defaults WAIT to false, which for THIS workflow is
+          # self-defeating: the run would go green before the pod is scheduled,
+          # so the ImagePullBackOff that the echo_image handling above exists to
+          # stop anyone misdiagnosing would not appear in the run at all. Step
+          # zero is an observation; wait for it.
+          #
+          # deploy.yml does not set this and keeps the default. That is a gap
+          # there too, not a difference in kind — recorded as a follow-up rather
+          # than changed in a commit that is not reviewing that file.
+          WAIT: "true"
           # `echo_image` is supplied HERE rather than checked into the vars
           # file. The reference is not knowable until the push above has run,
           # and a checked-in copy was a REPLACE_ME that nothing guarded — the

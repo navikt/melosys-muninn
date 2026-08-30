@@ -62,6 +62,15 @@ spec:
   replicas:
     min: 1
     max: 1
+  # Matches ../app.yaml. Absent a `strategy`, nais defaults to RollingUpdate —
+  # so a re-dispatch would bring a second echo pod up alongside the first and
+  # flip the ingress endpoint list MID-TEST, dropping the socket for a reason
+  # that is neither the ingress nor a Recreate rollout. That is the one thing
+  # step zero must not be ambiguous about. The runbook's triage list says "every
+  # rollout drops every socket, by design"; without this key that sentence was
+  # about ../app.yaml and not about what was deployed.
+  strategy:
+    type: Recreate
 
   liveness:
     path: /api/live

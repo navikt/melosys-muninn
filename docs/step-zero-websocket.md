@@ -120,14 +120,26 @@ domains. What you are looking for, in order:
   closes long-lived upgrades turns every long turn into a dropped answer.
   muninn's client retries in ~2 s, but the turn in flight does not come back.
 
-  Read that bullet precisely: it is **not** a test of a fully idle TCP
-  connection, and cannot be. Bun's WebSocket server auto-pings at roughly half
-  its `idleTimeout` (120 s by default, set or unset), the browser auto-pongs,
-  and that traffic resets nginx's `proxy_read_timeout`. So what you are proving
-  is "a socket lives past 60 s carrying only protocol keepalives" — which is
-  exactly the property production has, because real muninn is also `Bun.serve`
-  with the same default. A stub that disabled keepalives would test something
-  the real app never does.
+  It **is** a genuine idle test at that timescale, and an earlier version of
+  this page said twice that it could not be. Measured on the wire, decoding
+  opcode 9 with a client that never pongs:
+
+  | | first server PING | closed |
+  |---|---|---|
+  | this stub (no `idleTimeout`) | t=102.5 s | t=118.5 s |
+  | a server with `idleTimeout: 255` | t=104.0 s | t=120.0 s |
+
+  Nothing is sent in either direction between the greeting at t=0 and that
+  first ping at ~102 s, so across the ~60 s window the connection is idle. If
+  the socket dies at 60 s, **that is the ingress**, and it is the single most
+  important result step zero can produce — do not go looking for a keepalive
+  explanation, there is none at that timescale.
+
+  Two things the earlier text got wrong, recorded so they are not restored: the
+  ping cadence is ~103 s in **both** columns and is not `idleTimeout/2` (which
+  would predict 60 s and 127.5 s), and muninn does **not** run the default —
+  `src/index.ts` sets `idleTimeout: 255` at ref `21b436b`. That server-level
+  value does not govern the socket, which is why both columns land together.
 
 A third check — *a turn completes over it*, a message in and a streamed reply
 out — is **not** part of step zero. An echo stub cannot answer one, and it needs
@@ -150,7 +162,12 @@ zero does not deploy, at the exact moment the transport really had failed.
    upgrade for a different app than the one that will be deployed. Nothing
    checks this; diff them.
 3. **`Recreate` + one replica.** Every rollout drops every socket, by design. A
-   reconnect right after a deploy is not a bug.
+   reconnect right after a re-dispatch is not a bug. (This item was carried over
+   from the muninn-describing draft while `stub.yaml` declared no `strategy` at
+   all — so nais defaulted it to RollingUpdate and the sentence was false of
+   what was deployed. `stub.yaml` now carries `strategy: Recreate`, matching the
+   real app, which is also what stops a second echo pod flipping the ingress
+   endpoint list mid-test.)
 4. **The image did not pull.** `ImagePullBackOff` reads like a registry
    permission problem and usually is not. `step-zero.yml` now guards the
    placeholder case and asserts the pushed reference is digest-pinned, so what

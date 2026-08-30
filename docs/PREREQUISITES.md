@@ -25,6 +25,14 @@ on the list:
 - **§9** — a slug in the workflow, plus registry and deploy-identity access.
 - **§0** — a proof to run, not a value at all.
 
+That leaves §2, §3, §4 and §8 as the sections that *are* values you fill in
+`vars-q2.json` — and **two placeholders belong to no section at all**:
+`REPLACE_ME_namespace` and `REPLACE_ME_team`. Both are the team's own nais
+namespace and team slug, both come from the same place every other
+`navikt`/`teammelosys` repo gets them (`melosys-console`'s own vars file is the
+precedent), and both block every deploy. They are named here because a reader
+working section by section would otherwise never be told where to get them.
+
 **This repo is public**, so two rules apply to what is written down here.
 *Values*: the infrastructure names — namespace, team, ingresses, tenant, project,
 region — are public by the hundred across `navikt`, and the one value that is
