@@ -110,8 +110,32 @@ jobs:
       # endpoint that reports a source commit (/api/dashboard-build-hash is a
       # SHA-1 of two client bundles). Without these two lines the whole
       # traceability argument for not forking rests on Actions run history.
+      # The status of `echo "X=$(cmd)" >> file` is ECHO'S, never the command
+      # substitution's — so a failing `rev-parse` wrote `MUNINN_SHA=` and the
+      # step went GREEN. Measured: `fatal: not a git repository`, step rc 0,
+      # GITHUB_ENV carrying an empty value. Downstream that is `tag: muninn-`
+      # on both docker-build-push calls and `muninn_ref=` rendered into the
+      # deployed manifest, with every assertion below still passing. Of every
+      # write in this file it is the ONE whose silent failure reaches the
+      # cluster, and round 8's sweep cleared it as "aborts under set -e, fine
+      # as-is" without testing it. Assign first, then check, then export.
       - name: Resolve the muninn ref to a commit SHA
-        run: echo "MUNINN_SHA=$(git -C muninn rev-parse HEAD)" >> "$GITHUB_ENV"
+        env:
+          REF: ${{ inputs.muninn_ref }}
+        run: |
+          SHA=$(git -C muninn rev-parse HEAD) || {
+            echo "::error::could not resolve '$REF' to a commit in the muninn checkout"; exit 1
+          }
+          # 40 hex, either case — `rev-parse HEAD` returns nothing else on
+          # success, so this is a belt-and-braces on the value that becomes the
+          # GAR tag and the pod's MUNINN_REF. Through jq, NOT a `case` bracket
+          # range: a bracket range is a COLLATION range, ASCII only where
+          # bash's globasciiranges is on. docs/pipeline-guards.md §3 records
+          # that spelling being written and discarded once already.
+          printf %s "$SHA" | jq -Rsre 'test("\\A[0-9a-fA-F]{40}\\z")' > /dev/null || {
+            echo "::error::git rev-parse returned something that is not an object name: '$SHA'"; exit 1
+          }
+          echo "MUNINN_SHA=$SHA" >> "$GITHUB_ENV"
 
       # ---------------------------------------------------------------------
       # Three steps, in this order, and the order is the whole trick:
@@ -352,9 +376,16 @@ jobs:
           # does not exist, MCP servers that need `uv` and `npx`, and a Haiku
           # backend with no credential — a second, broken bot in front of a
           # colleague. This repo's `bots/` is the whole set, not an addition.
-          rm -rf muninn/bots
-          mkdir -p muninn/bots
-          cp -R deploy/bots/. muninn/bots/
+          # Guarded, and round 8's Class-A sweep missed all three while
+          # claiming to have enumerated every write in the file. `cp` failing
+          # was measured at rc 1 with ZERO annotations. These are also what a
+          # read-only `muninn/` hits FIRST — three lines before the mktemp
+          # below — which is why round 8's "with muninn/ read-only this one
+          # names it" was false: the step never reached the line it credited.
+          # It reaches an annotation now, from here.
+          rm -rf muninn/bots || { echo "::error::could not clear muninn/bots — is the checkout read-only?"; exit 1; }
+          mkdir -p muninn/bots || { echo "::error::could not create muninn/bots — is the checkout read-only?"; exit 1; }
+          cp -R deploy/bots/. muninn/bots/ || { echo "::error::could not copy deploy/bots into the build context"; exit 1; }
           ls -la muninn/bots
 
           # DERIVED, not a checked-in second copy. `nais/docker-build-push`
@@ -402,9 +433,14 @@ jobs:
           # it refuses a read-only .dockerignore that the previous `mv` form
           # replaced without complaint — a stricter failure on a state that
           # works today, i.e. the fix injecting its own defect. `mv` keeps the
-          # old behaviour and gains the annotation, which is the whole point:
-          # with muninn/ read-only the old line failed rc 1 with ZERO
-          # annotations, this one names it.
+          # old behaviour and gains an annotation on its own failure.
+          #
+          # It does NOT gain one for a read-only `muninn/`, and round 8's
+          # comment here claimed it did. That state dies at the `mkdir -p`
+          # above, three lines earlier, and never reaches this line at all —
+          # a claim made from a harness that drove this step from the `grep -q`
+          # onward instead of driving the whole `run:` body. Drive the WHOLE
+          # body; see the method note at the top of docs/pipeline-guards.md.
           mv "$STRIPPED" muninn/.dockerignore || {
             echo "::error::could not install the stripped .dockerignore over muninn/.dockerignore"; exit 1
           }
