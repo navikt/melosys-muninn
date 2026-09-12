@@ -11,6 +11,24 @@ overlaid into the build context. There is no patched Dockerfile and no vendored
 source. Public muninn carries no tags today, so in practice the first deploy
 names a SHA; see the deploy section below.
 
+## Why `CLAUDE.md` and `claude-cli` appear in this repo
+
+muninn is the upstream application, and these are its identifiers — not a
+statement about how this code was written. `CLAUDE.md` is the filename muninn
+discovers a bot by (`src/bots/config.ts`); `claude-cli` and `claude-sdk` are
+members of its connector enum; `CLAUDE_CODE_USE_VERTEX` and
+`ANTHROPIC_VERTEX_PROJECT_ID` are the Agent SDK's env names, and nothing here
+sets them — every occurrence is a comment or a doc line explaining the absence.
+
+This pod runs none of those paths. The bot pins `openai-compat` against Vertex,
+and the image is built `--build-arg WITH_CLI=false`, so it carries no `claude`
+binary at all — `deploy.yml` asserts both against the built image before it
+deploys. `docs/bot-folder-notes.md` §2 says what the connector pin buys.
+
+The names stay as upstream spells them. A local rename would leave the guards
+asserting something the pod does not boot on, which is the one thing they exist
+to prevent.
+
 ## Layout
 
 | Path | What it is |
