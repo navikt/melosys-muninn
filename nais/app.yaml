@@ -172,9 +172,12 @@ spec:
   # muninn log at all, while a secret present with a missing or misspelled key
   # reaches muninn's own boot assert, which refuses to start and says why.
   #
-  # The name is ours rather than `{{ app_name }}`: nais names its own generated
-  # secrets after the app. No collision rule is documented — this is hygiene,
-  # not a cited constraint.
+  # The name IS `{{ app_name }}`, which is the team's existing pattern:
+  # melosys-console-q2 mounts `envFrom: [{secret: melosys-console-q2}]`. An
+  # earlier revision used a distinct `…-admin-idents` name on the theory that
+  # nais reserves the app name for its own generated secrets. It does not —
+  # those are prefixed (`azure-melosys-muninn-q2-…`), and console has shipped
+  # the bare name for years. One secret per app, keys inside.
   #
   # The durable fix is not a longer allowlist: resolve admin from the `groups`
   # claim the manifest already requests, and no personal identifier exists in

@@ -11,8 +11,8 @@
   "tenant": "trygdeetaten.no",
   "group_muninn_bruker": "f5035189-0834-4ebb-b787-2608351f4843",
 
-  "_comment_admins": "There is deliberately no `admin_oids` key: an oid is a stable personal identifier for a named human, and this repo is public. MUNINN_ADMIN_IDENTS comes from the nais secret named below, which somebody creates in the namespace out of band — see docs/PREREQUISITES.md §10. The secret's KEY must be literally MUNINN_ADMIN_IDENTS; envFrom injects keys verbatim.",
-  "admin_secret": "melosys-muninn-q2-admin-idents",
+  "_comment_admins": "There is deliberately no `admin_oids` key: an oid is a stable personal identifier for a named human, and this repo is public. MUNINN_ADMIN_IDENTS comes from the nais secret named below, which somebody creates in the namespace out of band — see docs/PREREQUISITES.md §10. The secret is named after the APP, which is what melosys-console-q2 does (envFrom: [{secret: melosys-console-q2}]) — nais's own generated secrets are prefixed, e.g. azure-melosys-muninn-q2-…, so there is nothing to collide with. The secret's KEY must be literally MUNINN_ADMIN_IDENTS; envFrom injects keys verbatim.",
+  "admin_secret": "melosys-muninn-q2",
 
   "_comment_vertex": "There is deliberately no `vertex_host` key. The egress host is DERIVED by the deploy workflow from gcp_project + vertex_region and passed to nais/deploy as a VAR — leave it out and it stays that way. Adding it back means either a REPLACE_ME the first run hard-fails on, or a hand-filled value the computed VAR silently overrides.",
   "gcp_project": "teammelosys-dev-df53",

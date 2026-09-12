@@ -393,10 +393,17 @@ Two properties of that pipeline worth knowing before someone "simplifies" them:
 ## 10. The `MUNINN_ADMIN_IDENTS` secret
 
 Value: a Kubernetes secret in the namespace, named by `admin_secret` in
-`nais/vars-q2.json` (`melosys-muninn-q2-admin-idents`), carrying **one key,
-spelled exactly `MUNINN_ADMIN_IDENTS`**, whose value is the comma-separated oid
-list from §5.
+`nais/vars-q2.json` (`melosys-muninn-q2` — **the app name**, which is the
+team's existing pattern: `melosys-console-q2` mounts a secret of its own name),
+carrying **one key, spelled exactly `MUNINN_ADMIN_IDENTS`**, whose value is the
+comma-separated oid list from §5.
 Owner: **@navikt/teammelosys**
+
+An earlier revision named it `melosys-muninn-q2-admin-idents`, on the theory
+that nais reserves the app name for its own generated secrets. It does not —
+those are prefixed (`azure-melosys-muninn-q2-…`) — and a second naming
+convention for one team is a cost with no benefit. One secret per app, keys
+inside.
 
 This is the only prerequisite that is a *cluster action rather than a value*,
 and it exists because the repo is public (§5). `nais/app.yaml` mounts it with
