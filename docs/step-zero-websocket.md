@@ -149,6 +149,25 @@ out — is **not** part of step zero. An echo stub cannot answer one, and it nee
 the model and the database, i.e. everything step zero exists to avoid buying
 first. It belongs to acceptance, after the first real deploy.
 
+### The two domains do not behave the same before login
+
+Measured on the first live deploy, 2026-09-12:
+
+| request | intern | ansatt |
+|---|---|---|
+| `GET /api/live` | `200 ok` | `302` → `ansatt.dev.nav.no/oauth2/login` |
+
+`/api/live` is in `autoLoginIgnorePaths` and the intern host honours it. The
+ansatt host does not, because the redirect is not wonderwall's — the domain
+fronts everything with its own login, ahead of the sidecar. So expect a second,
+separate sign-in when you repeat the check there, and **do not read that
+redirect as a fault in the stub or the manifest**; it is the domain.
+
+Two things follow. The probes are unaffected: kubelet dials the pod directly and
+never traverses an ingress. And any future reasoning that treats the two hosts
+as differing only by naisdevice is wrong before login — they differ in who
+answers an unauthenticated request.
+
 ## The ways this fails that are not the ingress
 
 Rule these out before blaming the proxy. **They are about the STUB** — an
