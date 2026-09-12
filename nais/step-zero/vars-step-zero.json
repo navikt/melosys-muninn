@@ -8,7 +8,6 @@
   "team": "teammelosys",
 
   "ingress_intern": "https://melosys-muninn-q2.intern.dev.nav.no",
-  "ingress_ansatt": "https://melosys-muninn-q2.ansatt.dev.nav.no",
 
   "tenant": "trygdeetaten.no",
   "group_muninn_bruker": "f5035189-0834-4ebb-b787-2608351f4843"

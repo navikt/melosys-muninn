@@ -5,9 +5,8 @@
   "namespace": "teammelosys",
   "team": "teammelosys",
 
-  "_comment_ingresses": "TWO hostnames, both full https:// URLs. Both feed spec.ingresses, and MUNINN_ALLOWED_ORIGINS is DERIVED from the pair in app.yaml — there is deliberately no third variable to keep in step. intern = naisdevice; ansatt = reachable for team members without developer access.",
+  "_comment_ingresses": "ONE hostname, a full https:// URL. It feeds spec.ingresses, and MUNINN_ALLOWED_ORIGINS is DERIVED from it in app.yaml — there is deliberately no second variable to keep in step. `ansatt.dev.nav.no` was dropped: that domain authenticates through a shared SSO client, which leaves this app's group gate out of the login. See docs/PREREQUISITES.md §4.",
   "ingress_intern": "https://melosys-muninn-q2.intern.dev.nav.no",
-  "ingress_ansatt": "https://melosys-muninn-q2.ansatt.dev.nav.no",
 
   "tenant": "trygdeetaten.no",
   "group_muninn_bruker": "f5035189-0834-4ebb-b787-2608351f4843",

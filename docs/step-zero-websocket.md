@@ -110,8 +110,8 @@ There is no shortcut that proves the sidecar half without the login half.
 
 Open the ingress in a browser and complete the wonderwall login, then open a
 WebSocket to the stub's echo path from the page's own origin (the browser
-console is enough) and watch the network panel. Do this from **both** ingress
-domains. What you are looking for, in order:
+console is enough) and watch the network panel. One domain now —
+`intern.dev.nav.no`; see the note below. What you are looking for, in order:
 
 - **101 Switching Protocols.** A 401 means the token did not arrive; a 200 with
   an HTML body means something in the path answered the upgrade as an ordinary
@@ -149,24 +149,32 @@ out — is **not** part of step zero. An echo stub cannot answer one, and it nee
 the model and the database, i.e. everything step zero exists to avoid buying
 first. It belongs to acceptance, after the first real deploy.
 
-### The two domains do not behave the same before login
+### Why there is only one domain to check
 
-Measured on the first live deploy, 2026-09-12:
+`ansatt.dev.nav.no` was served until 2026-09-12 and was dropped the same day it
+first ran. Two measurements, both taken against the live stub:
 
 | request | intern | ansatt |
 |---|---|---|
 | `GET /api/live` | `200 ok` | `302` → `ansatt.dev.nav.no/oauth2/login` |
 
-`/api/live` is in `autoLoginIgnorePaths` and the intern host honours it. The
-ansatt host does not, because the redirect is not wonderwall's — the domain
-fronts everything with its own login, ahead of the sidecar. So expect a second,
-separate sign-in when you repeat the check there, and **do not read that
-redirect as a fault in the stub or the manifest**; it is the domain.
+`/api/live` is in `autoLoginIgnorePaths` and the intern host honours it; the
+ansatt host does not, because that redirect is not wonderwall's — the domain
+fronts every app with its own login. Following it lands on tenant
+`62366534-…` (`nav.no`) with client `ea1738f8-…`, and `melosys-console-q2`
+lands on exactly the same one. This app's registration is in
+`trygdeetaten.no`, so a trygdeetaten account answers `AADSTS500213` there.
 
-Two things follow. The probes are unaffected: kubelet dials the pod directly and
-never traverses an ingress. And any future reasoning that treats the two hosts
-as differing only by naisdevice is wrong before login — they differ in who
-answers an unauthenticated request.
+That is SSO mode, and its consequence is the reason for the drop rather than
+the login confusion: one centralised client authenticates the whole domain, so
+the app's own `allowAllUsers: false` and group claim are not in that login.
+The group is the only thing gating this pod. `docs/PREREQUISITES.md` §4 carries
+the full account, including what is measured, what is documented, what is only
+inferred, and the single test that would let the ingress back.
+
+**Nothing here weakens step zero.** The transport question — does an upgrade
+survive the ingress and the sidecar, and does it survive going idle — was
+answered on intern: `101`, an echo at `t=0`, and another at `t=70s`.
 
 ## The ways this fails that are not the ingress
 

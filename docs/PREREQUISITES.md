@@ -119,20 +119,17 @@ Used twice, and they are different uses: the sidecar's
 Texas is the authority on which directory it introspected, and a config value
 overruling it would be a second, weaker check in front of the real one.
 
-## 4. The ingress hostnames — TWO of them
+## 4. The ingress hostname — one, and why not two
 
-Values: `ingress_intern` and `ingress_ansatt` — full `https://…` URLs.
+Value: `ingress_intern` — a full `https://…` URL.
 Owner: **@navikt/teammelosys**
 
-**Supply two hostnames, not one.** This is the shape `melosys-console` already
-serves, and its reason is not cosmetic: `intern.dev.nav.no` requires naisdevice,
-so a team member **without developer access** reaches the app only through
-`ansatt.dev.nav.no`. Both feed `spec.ingresses`.
+One hostname, on `intern.dev.nav.no`. It feeds `spec.ingresses`.
 
-They are used a second time, and the second use is the one that bites.
-`MUNINN_ALLOWED_ORIGINS` is **derived** from the pair in `nais/app.yaml`
-(`value: "{{ ingress_intern }},{{ ingress_ansatt }}"`), and that variable stops
-the pod in two different ways:
+It is used a second time, and the second use is the one that bites.
+`MUNINN_ALLOWED_ORIGINS` is **derived** from it in `nais/app.yaml`
+(`value: "{{ ingress_intern }}"`), and that variable stops the pod in two
+different ways:
 
 - an authenticating mode **refuses to boot** on an empty value, and
 - the origin check compares `Origin` against this list and **never** against the
@@ -141,13 +138,48 @@ the pod in two different ways:
   is listed **verbatim, scheme included**. The same list gates `/chat/ws`.
 
 A wrong value here is a pod that loads the chat page and fails every write, with
-no error that names the cause. **A missing second value has exactly that
-symptom for exactly half the team**: everyone arriving on the ansatt domain.
+no error that names the cause.
 
-There is deliberately **no third `allowed_origins` variable**. One would
-reproduce the bug it looks like it prevents — a third ingress, or a hostname
-correction, updates two values and leaves the third stale, with the same silent
-symptom. Give the two hostnames; the origin list follows from them.
+There is deliberately **no second `allowed_origins` variable**. One would
+reproduce the bug it looks like it prevents — a hostname correction updates one
+value and leaves the other stale, with that same silent symptom. Give the
+hostname; the origin list follows from it. That is also why the derivation
+stays even though it now names a single host: the day a second ingress returns,
+the list follows it rather than being remembered.
+
+### `ansatt.dev.nav.no` was served, and was dropped on measurement
+
+An earlier revision served both domains, arguing from `melosys-console`. Two
+things turned up on 2026-09-12, the first day this ran in a cluster:
+
+1. **The precedent is thinner than it reads.** Searching all of `navikt`,
+   `ansatt.dev.nav.no` appears in exactly one Melosys file — one line in
+   `melosys-console/nais/vars-q2.json`. No other Melosys workload serves that
+   domain.
+2. **The group gate may not apply there.** `ansatt.dev.nav.no` runs wonderwall
+   in **SSO mode**: a single centralised OIDC client (`ea1738f8-…`, tenant
+   `nav.no` = `62366534-…`) authenticates every app on the domain, and the
+   individual app's registration does not take part in that login. This app's
+   registration is in `trygdeetaten.no` (`966ac572-…`), so presenting a
+   trygdeetaten account there answers `AADSTS500213`, and a `nav.no` account
+   authenticates against a client that knows nothing of the group below.
+
+§2 states the premise this deployment rests on: **muninn has no in-app login
+allowlist, so the sidecar group is the only thing deciding who may reach the
+app at all.** That premise is verified on `intern.dev.nav.no`. On the SSO
+domain it is in doubt, and a door that may be wider than the plan believes is
+not something to ship in front of colleague chat content.
+
+**What is measured and what is not.** Measured: the tenants, the shared client,
+and that `melosys-console-q2` hits the identical front door. Documented, not
+measured: that SSO mode uses one client for the whole realm
+(`nais/wonderwall`, `docs/architecture.md`). **Inferred, and NOT verified**:
+that the group therefore does not gate that domain.
+
+**The test that settles it** costs one login — have someone with a `nav.no`
+account who is **not** a member of the group open the ansatt host and see
+whether they reach the app. Re-adding the ingress afterwards is one commit:
+restore the key in both vars files, both manifests, and the derivation above.
 
 ## 5. Admin identities — a namespace secret, not a variable
 

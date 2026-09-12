@@ -126,9 +126,13 @@ project owns the quota.
 
 - **dev-gcp only, as `melosys-muninn-q2`.** Prod carries a personopplysninger
   decision that is not an engineering call.
-- **Two ingresses.** `intern.dev.nav.no` needs naisdevice; `ansatt.dev.nav.no` is
-  how a team member without developer access reaches it. `MUNINN_ALLOWED_ORIGINS`
-  is derived from the pair rather than maintained beside them.
+- **One ingress**, on `intern.dev.nav.no`, which needs naisdevice.
+  `MUNINN_ALLOWED_ORIGINS` is derived from it rather than maintained beside it.
+  `ansatt.dev.nav.no` was served until 2026-09-12 and was dropped: that domain
+  authenticates through a single shared SSO client, which leaves this app's
+  group gate out of the login — and that gate is the only thing deciding who
+  reaches the pod. `docs/PREREQUISITES.md` §4 has the measurement and the one
+  test that would allow it back.
 - **Chat only.** `MUNINN_PROFILE=nais` drops thirteen route groups; the wiki,
   the plans board, the capture verticals and the logs page are not registered.
   What is left is `/chat`, the operator dashboard, and two health paths.

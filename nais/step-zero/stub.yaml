@@ -24,8 +24,10 @@
 #   - the whole `azure:` block — tenant, allowAllUsers:false, the group, and
 #     `sidecar.autoLogin: true`. autoLogin is what refuses an unauthenticated
 #     upgrade AT THE SIDECAR, which is precisely the leg being proven.
-#   - both ingresses. The check is run from BOTH domains; an ingress class can
-#     differ between them.
+#   - the ingress. ONE now: ../app.yaml dropped `ansatt.dev.nav.no` after
+#     measuring that the domain's SSO mode authenticates through a shared
+#     client, leaving this app's group gate out of that login. The stub must
+#     serve whatever the real app serves, so it follows.
 #
 # WHAT IS DELIBERATELY ABSENT: gcp.sqlInstances, gcp.permissions,
 # accessPolicy, envFrom, and every muninn env var. None of them is needed to
@@ -117,4 +119,3 @@ spec:
 
   ingresses:
     - {{ ingress_intern }}
-    - {{ ingress_ansatt }}

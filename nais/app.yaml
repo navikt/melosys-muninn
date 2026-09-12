@@ -141,12 +141,22 @@ spec:
       memory: 512Mi
 
   ingresses:
-    # BOTH domains, as melosys-console serves them. `intern.dev.nav.no` needs
-    # naisdevice; `ansatt.dev.nav.no` is how a team member WITHOUT developer
-    # access reaches the app at all. Adding the second one is not cosmetic —
-    # see MUNINN_ALLOWED_ORIGINS below, which is derived from the pair.
+    # ONE domain. An earlier revision served `ansatt.dev.nav.no` too, arguing
+    # from melosys-console — but that is one unused line in one vars file, and
+    # across all of navikt no other Melosys workload serves that domain.
+    #
+    # It was dropped on measurement, not taste. `ansatt.dev.nav.no` runs
+    # wonderwall in SSO mode: a SINGLE centralised OIDC client (tenant
+    # `nav.no`) authenticates every app on the domain, so this app's own
+    # registration — and with it `allowAllUsers: false` and the group below —
+    # is not in the loop for that login. On `intern.dev.nav.no` it is. Since
+    # the group is the ONLY thing deciding who may reach this pod, a domain
+    # where it may not apply is a wider door than this deployment intends.
+    #
+    # Re-adding it is one commit. Answer the gate question first: log in on
+    # that domain with a `nav.no` account that is NOT a member of the group,
+    # and see whether it reaches the app.
     - {{ ingress_intern }}
-    - {{ ingress_ansatt }}
 
   # MUNINN_ADMIN_IDENTS arrives HERE, not in `env:` below, and this repo is
   # PUBLIC — that is the whole reason. An `oid` is a stable personal identifier
@@ -207,16 +217,15 @@ spec:
     # fix) — so a same-origin POST from the deployed page is refused, silently,
     # on every write. The same list gates /chat/ws.
     #
-    # DERIVED from the two ingress variables, not maintained as a third one. A
+    # DERIVED from the ingress variable, not maintained as a second one. A
     # separate `allowed_origins` value would reproduce the exact bug this is
-    # fixing: a third ingress, or a hostname correction, updates two values and
-    # leaves the third stale — and the symptom is a chat page that loads and
-    # then 403s every write and every socket upgrade, with nothing naming the
-    # cause. Two template tokens in one scalar is a shape no melosys-console
-    # variable uses today, which is why acceptance D3 reads the RENDERED
-    # manifest rather than assuming it renders.
+    # fixing: a hostname correction updates one value and leaves the other
+    # stale — and the symptom is a chat page that loads and then 403s every
+    # write and every socket upgrade, with nothing naming the cause. That
+    # reasoning is why this stays derived even now that it names ONE host:
+    # the day a second ingress comes back, the list follows it.
     - name: MUNINN_ALLOWED_ORIGINS
-      value: "{{ ingress_intern }},{{ ingress_ansatt }}"
+      value: "{{ ingress_intern }}"
 
     # --- the model -----------------------------------------------------------
     # Vertex, via the workload-identity SA granted above. No key anywhere.
