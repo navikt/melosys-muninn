@@ -17,18 +17,60 @@ against `replicas: 0`.
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-**The nais app user cannot create extensions.** `navikt/kbs-guide` documents the
-superuser-reset procedure for exactly this. So the schema arrives in two
-privilege levels, and only one statement needs the higher one.
+Creating an extension needs privileges an ordinary database user does not have,
+so muninn's entrypoint refuses rather than guessing. **What it does NOT mean is
+that a superuser reset is required** — see the measurement below.
+
+<!-- Everything from here to "The mechanism, decided" was rewritten on
+     2026-09-12, the day this ran against a real instance for the first time.
+     The previous text asserted that the nais app user cannot create
+     extensions and made a superuser reset step 2 of 4, unconditionally. Both
+     were wrong here, and the cost of leaving them would have been an operator
+     resetting a production-adjacent postgres password for no reason. -->
+
+### Measured 2026-09-12: the app user creates the extension itself
+
+On `melosys-muninn-q2` in dev-gcp, the nais-provisioned application user is a
+member of **`cloudsqlsuperuser`**:
+
+```
+melosys-muninn-q2  -> member of cloudsqlsuperuser
+rune.lind@nav.no   -> member of cloudsqliamuser
+```
+
+`cloudsqlsuperuser` is the Cloud SQL role permitted to create extensions, so
+`db/provision.ts --yes` run as the app user applied all of `init.sql` —
+`CREATE EXTENSION vector` included — and finished `exit 0`. Verified after the
+fact, independently of the applier's own log: 33 base tables, **all 33 owned by
+`melosys-muninn-q2`**, `vector 0.8.5` installed, 71 rows in
+`schema_migrations`.
+
+Note which way round the privileges fall. A **personal** IAM identity is in
+`cloudsqliamuser`, not `cloudsqlsuperuser` — so the human is the one who
+probably *cannot* create the extension, which is the opposite of what the
+superuser-reset procedure assumes.
+
+`navikt/kbs-guide`'s `appendices/pgvector.qmd` documents resetting the
+`postgres` password and running `CREATE EXTENSION` from Cloud SQL Studio. Treat
+that as the **fallback for an instance whose app user lacks the role**, not as a
+prerequisite. `db/provision.ts` reports the privilege wall explicitly if it hits
+one; run it first and let it tell you.
 
 ## The order, with the actor on every line
 
 | # | Step | Who runs it | If you get it wrong |
 |---|---|---|---|
 | 1 | Declare `gcp.sqlInstances` in `nais/app.yaml` and apply | the deploy | — |
-| 2 | Superuser reset on the instance | GCP console, team project | you cannot do step 3 |
-| 3 | `CREATE EXTENSION vector` | **elevated role, this step only** | migrations fail at the first `vector(384)` column |
-| 4 | `bun db/provision.ts --yes` — applies `db/init.sql` **and** baselines | **the app user** | the elevated role owns all 33 of init.sql's tables and the pod gets *permission denied* at first query — not a schema error, so it reads as a code bug |
+| 2 | `bun db/provision.ts --dry-run` — reports the resolved database and schema state | **the app user** | you provision the wrong database, or discover the privilege wall during a write |
+| 3 | `bun db/provision.ts --yes` — applies `db/init.sql` **and** baselines | **the app user** | the running role owns all 33 of init.sql's tables and the pod gets *permission denied* at first query — not a schema error, so it reads as a code bug |
+| 3b | *only if step 3 reports a privilege error*: `CREATE EXTENSION vector` via the kbs-guide procedure, then repeat step 3 | elevated role | — |
+
+**"The app user" is a constraint on the connection, not a figure of speech.**
+The credentials live in the nais-generated `google-sql-<app>` secret, which the
+team cannot read — `container.secrets.get` is not granted — so there is no way
+to type them into a proxy session. That rules out `nais postgres proxy`, whose
+IAM login authenticates as the *human*: the tables would come out owned by a
+personal identity. The next section is the route that does work.
 
 Step 4 does two things that used to be two steps. It applies `init.sql` — the
 consolidated schema — and then *marks applied* every shipped migration, so the
@@ -89,6 +131,60 @@ kubectl debug -n <namespace> <pod> --copy-to=muninn-schema \
 
 # b) a naisjob with its own `command:` — the same image, the same env
 ```
+
+### Form (a) is not available to the team, and (b) needs three things
+
+Measured 2026-09-12 in `teammelosys` / dev-gcp. A team member's own access:
+
+| action | allowed |
+|---|---|
+| `create pods`, `create pods/exec` | **no** |
+| `create jobs` | **no** |
+| `create naisjobs.nais.io` | **yes** |
+
+So **(a) is closed** — `kubectl debug` copies a pod, and that is a pod create.
+`nais postgres proxy` is closed for a different reason (see the previous
+section: it logs in as the human). **(b) is the route**, and a working Naisjob
+needs three things, of which only the first is obvious:
+
+1. **`envFrom: google-sql-<app>`** — the app user's credentials and `DB_URL`,
+   injected by Kubernetes so nobody has to read the secret.
+2. **`filesFrom`** the `sqeletor-<app>-<hash>` secret at
+   `/var/run/secrets/nais.io/sqlcertificate` — `DB_URL` is `sslmode=verify-ca`
+   against a private IP and names three files under that path. Without it the
+   connection fails in TLS, not in SQL.
+3. **A NetworkPolicy granting egress to the instance's private IP.** This is
+   the one that costs an hour. NAIS generates `sql-<instance>-<app>` selecting
+   `app: <app>`, and the job's pods are `app: <app>-provision`, so they match
+   nothing and the connection dies as `CONNECT_TIMEOUT` — which reads like a
+   firewall problem with no firewall in sight.
+
+⚠️ **Do not "fix" (3) by giving the Naisjob its own `gcp.sqlInstances`.** It
+looks like the tidy answer and NAIS would indeed generate the netpol — along
+with a **second SQL user named after the job**, which would then own every
+table `init.sql` creates. That is the ownership failure this whole page is
+organised around, arrived at from a new direction. Copy the one egress rule
+instead:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sql-provision-<app>
+spec:
+  podSelector:
+    matchLabels:
+      app: <app>-provision
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: <read it from the app's own sql-<instance>-<app> policy>
+```
+
+Read the CIDR from the generated policy rather than from `gcloud`, so it cannot
+drift from what the app itself is allowed to reach. Delete the policy with the
+job — it names an instance IP and must not outlive it.
 
 `--yes` is required and the script prints `Database: host:port/db` **before**
 asking for it. Read that line. It is the only thing standing between

@@ -209,25 +209,47 @@ in muninn, not here.
 
 Owner: **@navikt/teammelosys**
 
-The full runbook is `db-setup.md`. The short version, and the reason it is not
-automated: **the nais app user cannot create extensions**, and `db/init.sql`
-line 5 is `CREATE EXTENSION IF NOT EXISTS vector`. Ordered, with the actor named
-on each step because getting the middle one wrong fails *silently*:
+The full runbook is `db-setup.md`, and it now records what happened the first
+time this ran for real (2026-09-12). The short version: `db/init.sql` line 5 is
+`CREATE EXTENSION IF NOT EXISTS vector`, creating an extension is privileged,
+and muninn's entrypoint refuses rather than guessing. Ordered, with the actor on
+each line because getting the actor wrong fails *silently*:
 
 1. Declare the instance in the manifest and apply it.
-2. Superuser reset (the `navikt/kbs-guide` procedure).
-3. `CREATE EXTENSION vector` — **elevated role, this step only.**
-4. `bun db/provision.ts --yes` — **as the app user.** Applies `db/init.sql` and
-   baselines in one command, from the image (muninn #486; the pinned muninn ref
-   must contain it). If the elevated role runs it, the
-   app user ends up without ownership of any of init.sql's 33 tables and the
-   pod gets permission-denied at first query rather than a clear schema error.
+2. `bun db/provision.ts --dry-run` — **as the app user.** Reports the resolved
+   database and the schema state, writes nothing.
+3. `bun db/provision.ts --yes` — **as the app user.** Applies `db/init.sql` and
+   records the shipped migrations as baselined, in one command, from the image
+   (muninn #486 — the pinned muninn ref must contain it).
+4. *Only if step 3 reports a privilege error*: run `CREATE EXTENSION vector`
+   once via the `navikt/kbs-guide` procedure, then repeat step 3. `init.sql`'s
+   own `IF NOT EXISTS` then short-circuits before the privilege check.
 
-Step 4 is two things in one command: apply the consolidated schema, then
-*mark-applied* every shipped migration. Without the second half, migrations 006
-onwards re-run over a schema that already carries them and the pod crash-loops.
+**Step 4 was not needed here, and the old version of this section said it
+always was.** Measured: the nais-provisioned app user is a member of
+`cloudsqlsuperuser`, which may create extensions, so step 3 applied the whole
+file — extension included — and exited 0. A *personal* IAM identity is in
+`cloudsqliamuser` and is the one that likely cannot. Do not reset the `postgres`
+password as a matter of routine.
 
-The entrypoint attempts none of these. It refuses an unprovisioned *and* an
+**"As the app user" is a hard constraint.** Step 3 is two things in one command
+— apply the consolidated schema, then mark every shipped migration applied —
+and without the second half, migrations 006 onwards re-run over a schema that
+already carries them and the pod crash-loops. But the actor matters just as
+much as the command: if anything other than the app user runs it, that role owns
+all 33 of `init.sql`'s tables and the pod gets *permission denied* at first
+query, which reads as a code bug rather than a schema one. Verified after the
+fact here: 33 tables, all owned by `melosys-muninn-q2`.
+
+That constraint is what decides *how* you run it. The app user's credentials are
+in the nais-generated `google-sql-<app>` secret, which the team cannot read, so
+they cannot be typed into a proxy session — and `kubectl debug` is unavailable
+because creating pods is not granted either. A **Naisjob** is the route; it
+needs the credentials secret, the SSL certificate secret, **and** a NetworkPolicy
+that NAIS will not generate for it. `db-setup.md` has the manifest and the trap
+to avoid.
+
+The entrypoint attempts none of this. It refuses an unprovisioned *and* an
 unbaselined database and prints remedies that are executable in the state that
 prints them — which became true with muninn #486; before it, the remedy for an
 empty database named `psql`, which the image does not ship and which no machine
@@ -392,7 +414,7 @@ Two properties of that pipeline worth knowing before someone "simplifies" them:
 
 ## 10. The `MUNINN_ADMIN_IDENTS` secret
 
-Value: a Kubernetes secret in the namespace, named by `admin_secret` in
+Value: a Kubernetes secret **in the `dev-gcp` cluster**, in the namespace, named by `admin_secret` in
 `nais/vars-q2.json` (`melosys-muninn-q2` — **the app name**, which is the
 team's existing pattern: `melosys-console-q2` mounts a secret of its own name),
 carrying **one key, spelled exactly `MUNINN_ADMIN_IDENTS`**, whose value is the
@@ -415,6 +437,12 @@ envFrom:
 
 Three things about it, each of which has a distinct failure:
 
+- **The environment is not free either, and "development" is ambiguous.** NAV
+  has `dev-gcp` **and** `dev-fss`, NAIS Console offers both, and secrets do not
+  cross clusters. A secret created in `dev-fss` with a perfect name and a
+  perfect key is invisible to this pod, which fails exactly as if it did not
+  exist — `CreateContainerConfigError`, no application log. Measured
+  2026-09-12, and it cost a deploy cycle.
 - **The key name is not free.** `envFrom` injects a secret's keys verbatim as
   environment variables, so a key called `admin_oids` or `ADMIN_IDENTS` produces
   a pod with no `MUNINN_ADMIN_IDENTS` at all.

@@ -1,0 +1,48 @@
+# One-shot schema provisioning for melosys-muninn-q2 — see docs/db-setup.md.
+#
+# WHY THIS EXISTS AND `kubectl debug` DOES NOT. Measured 2026-09-12 in
+# teammelosys/dev-gcp: a team member may NOT create pods, pods/exec or jobs,
+# but MAY create naisjobs.nais.io. So the runbook's `kubectl debug --copy-to`
+# is unavailable, and this is the route that is left.
+#
+# It must run AS THE APP USER — if anything else applies db/init.sql, that role
+# owns all 33 tables and the pod gets permission-denied at first query. That is
+# why the credentials come from the nais-generated `google-sql-` secret rather
+# than a proxy session: nobody can read that secret (container.secrets.get is
+# not granted), and `nais postgres proxy` logs in as the human.
+#
+# THE IMAGE IS PINNED BY DIGEST and must be refreshed to whatever the deploy
+# workflow last pushed — read it from the running Deployment. It is not
+# templated because this file is applied by hand, not by nais/deploy.
+#
+# `--dry-run` first, ALWAYS: it prints the database it resolved and the schema
+# state, and writes nothing. Swap to `--yes` only after reading that output.
+#
+# Apply nais/provision-netpol.yaml alongside it, or the connection dies as
+# CONNECT_TIMEOUT with no firewall in sight. Delete both when finished.
+apiVersion: nais.io/v1
+kind: Naisjob
+metadata:
+  name: melosys-muninn-q2-provision
+  namespace: teammelosys
+  labels:
+    team: teammelosys
+spec:
+  image: europe-north1-docker.pkg.dev/nais-management-233d/teammelosys/melosys-muninn:2026.09.12-12.59-45079c9@sha256:f2d871954c5f80dfdf47521a578aa0cda1360947efec96a8a5614588541f4231
+  command:
+    - bun
+    - db/provision.ts
+    - --dry-run
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  envFrom:
+    - secret: google-sql-melosys-muninn-q2
+  filesFrom:
+    - secret: sqeletor-melosys-muninn-q2-adf6ac08
+      mountPath: /var/run/secrets/nais.io/sqlcertificate
+  resources:
+    limits:
+      memory: 1024Mi
+    requests:
+      cpu: 200m
+      memory: 512Mi

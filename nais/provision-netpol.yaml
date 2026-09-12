@@ -1,0 +1,28 @@
+# Egress to the Cloud SQL private IP for the provisioning job.
+#
+# NAIS generates one of these per (workload, sqlInstance) pair — here
+# sql-melosys-muninn-q2-melosys-muninn-q2, selecting app=melosys-muninn-q2.
+# The provisioning Naisjob declares no gcp.sqlInstances (declaring one would
+# make NAIS provision a SECOND sql user, which would then own init.sql's
+# tables — the ownership failure the whole exercise avoids), so it gets no
+# such policy and its connection times out at the TCP layer.
+#
+# This grants the job the same one egress the app already has. Delete it with
+# the job; it references an instance IP and must not outlive it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sql-provision-melosys-muninn-q2
+  namespace: teammelosys
+  labels:
+    team: teammelosys
+spec:
+  podSelector:
+    matchLabels:
+      app: melosys-muninn-q2-provision
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 100.71.5.212/32
