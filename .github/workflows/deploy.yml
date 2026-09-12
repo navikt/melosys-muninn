@@ -42,7 +42,7 @@ permissions:
   id-token: write
 
 env:
-  MUNINN_REPO: REPLACE_ME_public_muninn_repo   # e.g. owner/muninn
+  MUNINN_REPO: RuneLind/muninn
 
 jobs:
   build-and-deploy:

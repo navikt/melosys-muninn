@@ -4,12 +4,12 @@
   "_comment_image": "The echo image reference is NOT a value here. It is not knowable until .github/workflows/step-zero.yml has built and pushed it, and that workflow hands it to nais/deploy as `VAR: echo_image=<digest-pinned ref>`. It used to be a checked-in REPLACE_ME that no guard covered, and its failure — ImagePullBackOff — is the one build/echo/Dockerfile notes reads like a registry permission problem.",
 
   "app_name": "melosys-muninn-q2",
-  "namespace": "REPLACE_ME_namespace",
-  "team": "REPLACE_ME_team",
+  "namespace": "teammelosys",
+  "team": "teammelosys",
 
-  "ingress_intern": "REPLACE_ME_https_ingress_intern_url",
-  "ingress_ansatt": "REPLACE_ME_https_ingress_ansatt_url",
+  "ingress_intern": "https://melosys-muninn-q2.intern.dev.nav.no",
+  "ingress_ansatt": "https://melosys-muninn-q2.ansatt.dev.nav.no",
 
-  "tenant": "REPLACE_ME_entra_tenant",
-  "group_muninn_bruker": "REPLACE_ME_group_object_id"
+  "tenant": "trygdeetaten.no",
+  "group_muninn_bruker": "f5035189-0834-4ebb-b787-2608351f4843"
 }
