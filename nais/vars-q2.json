@@ -17,8 +17,7 @@
   "_comment_vertex": "There is deliberately no `vertex_host` key. The egress host is DERIVED by the deploy workflow from gcp_project + vertex_region and passed to nais/deploy as a VAR — leave it out and it stays that way. Adding it back means either a REPLACE_ME the first run hard-fails on, or a hand-filled value the computed VAR silently overrides.",
   "gcp_project": "teammelosys-dev-df53",
   "vertex_region": "europe-north1",
-
-  "db_instance": "muninn-db",
-  "db_name": "muninn",
+  "db_name": "muninn-db-q2",
+  "_comment_db": "There is deliberately no `db_instance` key. The instance name is left unset in app.yaml so it defaults to the APP name — melosys-muninn-q2, which already carries the environment — matching skattehendelser-q2 and both faktureringskomponenten apps. `db_name` carries the -q2 suffix for the same reason: a prod deployment must not want a name this one already holds.",
   "db_tier": "db-custom-1-3840"
 }

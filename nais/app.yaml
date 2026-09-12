@@ -88,8 +88,16 @@ spec:
 
   gcp:
     sqlInstances:
-      - name: {{ db_instance }}
-        type: POSTGRES_17
+      # NO `name:`. The instance then defaults to the APP name, which already
+      # carries the environment (`melosys-muninn-q2`) — the shape six of the
+      # team's eight sql-bearing apps use (skattehendelser-q2,
+      # faktureringskomponenten-q1/q2, melosys-trygdeavgift-beregning-q1 …).
+      #
+      # An earlier revision pinned `muninn-db`, which names no environment at
+      # all: a later prod or q1 deployment in the same project would want the
+      # same instance name. Renamed while the database was still empty, which
+      # is the only time it is free.
+      - type: POSTGRES_17
         tier: {{ db_tier }}
         diskAutoresize: true
         cascadingDelete: false
