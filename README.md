@@ -36,7 +36,9 @@ to prevent.
 | `nais/app.yaml` | The Application manifest. Templated with `{{ }}`; every comment in it explains a constraint that is easy to "simplify" into an outage. |
 | `nais/vars-q2.json` | The values. Ships full of `REPLACE_ME_` — see `docs/PREREQUISITES.md`. |
 | `bots/melosys/` | The bot: persona, `config.json`, an empty `.mcp.json`. Copied into `bots/` in the build context. |
-| `.github/workflows/deploy.yml` | Check out muninn at a pinned ref → resolve it to a SHA → assign the Vertex base URL → overlay → build → assert → push → deploy. |
+| `.github/workflows/deploy.yml` | Check out muninn at a pinned ref → resolve it to a SHA → assign the Vertex base URL → overlay → build and push → pull the digest → assert → scan → deploy. |
+| `build/Dockerfile.nais` + `build/nais-entrypoint.ts` | The deployed image: Docker Hardened Images Bun, no shell, and a shell-free entrypoint. See `docs/runtime-image.md`. |
+| `build/upstream-copy-lines.txt` | Upstream's Dockerfile COPY lines as last mirrored. The workflow stops when they change. |
 | `nais/step-zero/` | The stub `Application` and its own vars file, for proving the WebSocket upgrade **before** buying Cloud SQL and the GCP project. |
 | `nais/provision-job.yaml` + `nais/provision-netpol.yaml` | The one-shot schema step, as a Naisjob. Applied by hand, not by a workflow — `kubectl debug` is unavailable to the team and the job needs a NetworkPolicy nais will not generate for it. See `docs/db-setup.md`. |
 | `.github/workflows/step-zero.yml` | Builds the echo image → pushes it → applies the stub. Deliberately separate from `deploy.yml`, which refuses while `vars-q2.json` holds a `REPLACE_ME`. |

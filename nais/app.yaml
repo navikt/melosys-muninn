@@ -104,7 +104,7 @@ spec:
         databases:
           - name: {{ db_name }}
             # This is what makes the platform inject DB_URL (rather than
-            # NAIS_DATABASE_<APP>_<DB>_URL). muninn's entrypoint adopts DB_URL
+            # NAIS_DATABASE_<APP>_<DB>_URL). The image's entrypoint adopts DB_URL
             # into DATABASE_URL, and both db/ CLIs read it directly so the
             # `kubectl debug` remedies target the right database.
             envVarPrefix: DB

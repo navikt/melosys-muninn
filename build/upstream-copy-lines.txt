@@ -1,0 +1,8 @@
+COPY package.json bun.lock ./
+COPY src/logging.ts ./src/logging.ts
+COPY src/ai/embeddings.ts ./src/ai/embeddings.ts
+COPY src ./src
+COPY db ./db
+COPY scripts/docker-entrypoint.sh ./scripts/
+COPY tsconfig.json ./
+COPY bot[s] ./bots/

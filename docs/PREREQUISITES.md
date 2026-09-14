@@ -392,19 +392,13 @@ Two things still have to exist outside this repo.
 
 Two properties of that pipeline worth knowing before someone "simplifies" them:
 
-1. **The image is asserted BEFORE it is pushed.** The action is called twice —
-   once with `push_image: "false"` and `outputs: type=docker`, which loads the
-   image into the runner's daemon for three assertion steps (the bot set, the
-   absent CLI and ffmpeg, the embedding weights), and once to push from the
-   shared cache. A bad image therefore never reaches GAR. The two calls repeat
-   `team`, `docker_context`, `build_args`, `tag` and `salsa` verbatim — that
-   identity is the only thing tying the asserted image to the pushed one — and
-   differ in exactly three inputs, all deliberate: `push_image`, `outputs`, and
-   `pull`, which the push call turns off so a base image republished between
-   them cannot substitute an uninspected build. That last one **narrows the
-   window rather than closing it**, and nothing in the pipeline can detect it
-   regressing; the shape that would close it is the fallback third job, which
-   pulls the pushed image and re-runs the assertions against it.
+1. **The image is asserted AFTER it is pushed, and the asserted digest is the
+   one deployed.** The action is called once, with `build/Dockerfile.nais`. The
+   workflow pulls the pushed `@sha256:` reference back, runs the assertions
+   and the Trivy scan against it, and deploys that reference. A bad image can
+   therefore reach GAR, but not the cluster. The previous shape asserted a
+   separate non-pushed build first, and nothing tied that build to the pushed
+   one. `docs/runtime-image.md` lists the checks.
 2. **A deploy names the muninn commit it shipped.** The dispatched ref is
    resolved to a SHA right after the checkout, and that SHA becomes both a GAR
    tag (`muninn-<sha>`) and the pod's `MUNINN_REF`. The deployed `Application`'s

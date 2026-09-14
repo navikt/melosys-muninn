@@ -162,11 +162,11 @@ turn, in front of a colleague, with the whole pipeline green.
 The guard therefore checks the VALUE against the allowlist `copilot-sdk` /
 `openai-compat` / `claude-sdk` — which is `CONNECTOR_VALUES` minus `claude-cli`
 — and that single test covers unset, mistyped, explicitly-`claude-cli` and
-unparseable alike. It is asserted **twice**: on `deploy/bots/` before the build, and on the built
-IMAGE before it is pushed, because nothing else binds the source tree to the
-artifact. ⚠️ **Not on the pushed artifact** — that is a different image (the
-assertion call is `push_image: "false"`), and the workflow is explicit that
-nothing ties the two together; see the `pull` comment on the push call.
+unparseable alike. It is asserted **twice**: on `deploy/bots/` before the build, and on the
+pushed digest, pulled back from GAR, because nothing else binds the source tree
+to the artifact. The deploy uses that same digest reference. (Until the DHI
+runtime, the image assertions ran on a separate non-pushed build, and nothing
+tied it to the pushed one.)
 
 ⚠️ **The allowlist is hardcoded and has a maintenance obligation.** The day
 muninn gains a fifth connector, a correctly-pinned bot using it is refused here.
