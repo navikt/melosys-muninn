@@ -1,0 +1,3 @@
+sha256 Dockerfile eee6e35263647d2c3c2e552552f8644349f828d5b9952771b56dd729888a1a06
+sha256 scripts/docker-entrypoint.sh c680be9b0904ce4587e334cf4cdb338ae9bc82482aea0fc9827884e5377f0565
+scripts.start bun run src/index.ts

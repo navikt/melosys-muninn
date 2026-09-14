@@ -1,10 +1,11 @@
 name: deploy
 
-# Builds an image from PUBLIC muninn at a pinned ref, overlaid with this repo's
-# bot folder, asserts it, pushes it to the team's GAR and deploys it to dev-gcp.
-# Nothing in the public repo is edited: the only things this workflow changes in
-# the checkout are `bots/` (replaced wholesale) and one line removed from
-# `.dockerignore`.
+# Builds an image from PUBLIC muninn at a pinned ref with build/Dockerfile.nais
+# (Docker Hardened Images Bun runtime), overlaid with this repo's bot folder,
+# pushes it to the team's GAR, checks and scans the pushed digest, and deploys
+# that digest to dev-gcp. Nothing in the public repo is edited: the only things
+# this workflow changes in the checkout are `bots/` (replaced wholesale), one
+# added file (`nais-entrypoint.ts`) and one line removed from `.dockerignore`.
 #
 # The ref is an INPUT with no default that floats. A deploy should name the
 # muninn commit it shipped, and `main` is not a name — a rollback needs to be
@@ -43,6 +44,8 @@ permissions:
 
 env:
   MUNINN_REPO: RuneLind/muninn
+  # Pinned by digest: the scanner decides whether a deploy happens.
+  TRIVY_IMAGE: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
 
 jobs:
   build-and-deploy:
@@ -296,8 +299,8 @@ jobs:
           # case. Assert the invariant this POD needs, per bot folder. muninn's
           # own nais boot line states it: "every bot on this deployment must be
           # pinned to a non-CLI connector" — the profile's CLI refusal covers
-          # spawnHaiku, NOT the chat connector, and the image is built
-          # WITH_CLI=false.
+          # spawnHaiku, NOT the chat connector, and build/Dockerfile.nais
+          # installs no Claude CLI.
           #
           # The connector is checked by VALUE, not by "config.json exists":
           # `resolveConnector` is `botConfig.connector ?? "claude-cli"`, and
@@ -398,6 +401,11 @@ jobs:
           mkdir -p muninn/bots || { echo "::error::could not create muninn/bots — is the checkout read-only?"; exit 1; }
           cp -R deploy/bots/. muninn/bots/ || { echo "::error::could not copy deploy/bots into the build context"; exit 1; }
           ls -la muninn/bots
+          # The shell-free entrypoint build/Dockerfile.nais COPYs. It lives in
+          # this repo, and the build context is the muninn checkout.
+          cp deploy/build/nais-entrypoint.ts muninn/nais-entrypoint.ts || {
+            echo "::error::could not copy build/nais-entrypoint.ts into the build context"; exit 1
+          }
 
           # DERIVED, not a checked-in second copy. `nais/docker-build-push`
           # reads the ignore file at the CONTEXT root (./muninn/.dockerignore),
@@ -456,123 +464,88 @@ jobs:
             echo "::error::could not install the stripped .dockerignore over muninn/.dockerignore"; exit 1
           }
 
-      # Build WITHOUT pushing, and load the result into the local daemon, so the
-      # assertions below run against the artifact before it can reach GAR. The
-      # action's salsa/attest step is gated on push_image == 'true', so this call
-      # cannot fail on attestation and salsa does not need turning off for it.
+      # build/Dockerfile.nais and build/nais-entrypoint.ts replace upstream's
+      # Dockerfile, shell entrypoint and `bun run start`, so any upstream change
+      # to those would ship without them, green. The pin holds the sha256 of
+      # the WHOLE upstream Dockerfile and entrypoint, and the start script,
+      # as last mirrored. Whole-file, not per-instruction: a line list missed
+      # USER, ENV, indented instructions and the start script in turn. A
+      # comment-only upstream edit stops the deploy too; re-pin after reading
+      # the diff (docs/runtime-image.md).
+      - name: build/Dockerfile.nais still mirrors upstream's build and entrypoint
+        run: |
+          DF=$(sha256sum muninn/Dockerfile) || {
+            echo "::error::muninn/Dockerfile is gone or unreadable — upstream's build has moved"; exit 1
+          }
+          EP=$(sha256sum muninn/scripts/docker-entrypoint.sh) || {
+            echo "::error::muninn/scripts/docker-entrypoint.sh is gone or unreadable — re-check build/nais-entrypoint.ts against upstream's startup"; exit 1
+          }
+          START=$(jq -er '.scripts.start' muninn/package.json) || {
+            echo "::error::muninn/package.json has no scripts.start — re-check the server import in build/nais-entrypoint.ts"; exit 1
+          }
+          if ! printf 'sha256 Dockerfile %s\nsha256 scripts/docker-entrypoint.sh %s\nscripts.start %s\n' "${DF%% *}" "${EP%% *}" "$START" \
+              | diff -u deploy/build/upstream-dockerfile-pin.txt -; then
+            echo "::error::upstream's Dockerfile, entrypoint or start script changed — mirror it in build/Dockerfile.nais or build/nais-entrypoint.ts, then re-pin build/upstream-dockerfile-pin.txt"; exit 1
+          fi
+
+      # ONE build, and it pushes. Every check below runs against the pushed
+      # digest, pulled back from GAR, and the deploy uses that same reference.
+      # The previous shape asserted a locally loaded build and then pushed a
+      # second build, and nothing tied the two together.
       #
-      # `docker_context` is existence-checked and may be a subdirectory; files a
-      # preceding step copied in are used as-is. `dockerfile` is deliberately
-      # NOT set: the action uses it VERBATIM rather than joining it to the
-      # context, so `dockerfile: Dockerfile` would look right and resolve to the
-      # wrong path. Unset, it defaults to ./muninn/Dockerfile.
-      #
-      # `platforms` is deliberately omitted (builds the runner's platform only).
-      # melosys-console builds linux/amd64,linux/arm64; nais runs amd64, and
-      # arm64 under QEMU with a HuggingFace model bake on the critical path buys
-      # nothing.
-      #
-      # NOTE this shape is reasoned, not measured: `outputs: type=docker`
-      # through this action has not been exercised here. If the local load
-      # misbehaves, the fallback is a third job between build and deploy
-      # (nais/login → docker pull → the same assertions) — the shape
-      # melosys-console's prod job uses. Four things do not survive that move;
-      # they are enumerated in the mimir plan, and the sharpest is that
-      # $GITHUB_ENV is job-scoped, so MUNINN_SHA, VERTEX_HOST *and TEAM* vanish.
-      - name: Build the image and load it locally, without pushing
-        id: docker-assert
+      # `dockerfile` is relative to the WORKSPACE, not to `docker_context`: the
+      # action uses it verbatim. Both base images are digest-pinned inside the
+      # Dockerfile, so the action's default `pull` cannot move them.
+      - name: Build and push the image
+        id: docker-push
         uses: nais/docker-build-push@v0
         with:
           team: ${{ env.TEAM }}
           docker_context: ./muninn
-          # Explicit on BOTH calls, and the same value. The action's own default
-          # tag embeds a MINUTE-resolution timestamp, so two invocations either
-          # side of a minute boundary produce different names.
+          dockerfile: deploy/build/Dockerfile.nais
+          # The action's own default tag embeds this repo's SHA, not muninn's.
           tag: muninn-${{ env.MUNINN_SHA }}
-          build_args: |
-            WITH_MEDIA=false
-            WITH_CLI=false
-            WITH_EMBEDDINGS=true
-          push_image: "false"
-          outputs: type=docker
           salsa: true
 
-      # Acceptance D1. The bot check asserts the EXACT SET, not "contains": too
-      # few is a CrashLoopBackOff (discoverAllBots exits 1 on zero folders), and
-      # too many is a broken bot offered to a colleague in the picker. Both have
-      # happened here.
+      # A digest, or nothing below is checking the artifact that deploys: a tag
+      # can be re-pushed between this pull and the deploy.
+      - name: Pull the pushed image by digest
+        env:
+          IMG: ${{ steps.docker-push.outputs.image }}
+        run: |
+          case "$IMG" in
+            *@sha256:*) ;;
+            *) echo "::error::the push produced no digest reference: '$IMG'"; exit 1 ;;
+          esac
+          docker pull "$IMG" || { echo "::error::could not pull $IMG back from GAR"; exit 1; }
+
+      # The runtime image has NO SHELL, so every check runs `bun -e` as the
+      # entrypoint. Values reach the script through `-e VAR=`, never through
+      # string interpolation into the script.
       #
-      # The image reference comes from the ACTION rather than being rebuilt by
-      # hand — the non-push call still sets outputs.image, to the locally-loaded
-      # digest-less tag, so this needs no GAR base path and does not depend on
-      # the two calls having agreed on a tag.
+      # The bot check asserts the EXACT SET: too few is a CrashLoopBackOff
+      # (discoverAllBots exits 1 on zero folders), too many is a broken bot in
+      # the picker. readdirSync lists dot-entries, as `ls -1A` did.
       - name: The image contains exactly this repo's bots
         env:
-          IMG: ${{ steps.docker-assert.outputs.image }}
+          IMG: ${{ steps.docker-push.outputs.image }}
         run: |
-          # `ls -1A`, both sides, and it is worth being exact about what that
-          # buys, because the two ghost cases are caught by DIFFERENT things.
-          # Measured:
-          #   ghost in the IMAGE only  -> GOT != WANT, this comparison refuses
-          #                               (under `ls -1` it was invisible here)
-          #   ghost on BOTH sides      -> GOT == WANT, this comparison PASSES.
-          # What refuses the both-sides case is the SLUG GUARD in the
-          # bot-folder step, whose pattern is `\A[a-z0-9][a-z0-9-]*\z` — it
-          # pins the FIRST character to a letter or digit (so `-foo` is refused
-          # too, and the empty name), which is what refuses a dot-entry
-          # unconditionally, before the overlay ever runs. Measured, all three fixtures: image-only ghost
-          # -> this comparison refuses; both-sides ghost -> the slug guard
-          # refuses; a both-sides ghost that somehow reached here WELL-FORMED
-          # (non-empty CLAUDE.md, pinned connector) passes this whole step.
-          # An earlier draft of this comment credited the per-bot loop below,
-          # which is only true when the ghost is MALFORMED — do not restore it.
-          # So `-1A` closes the one-sided case AND feeds the dot-entry to the
-          # per-bot assertions; the set comparison alone cannot catch a ghost
-          # that is present on both sides, and is not what is relied on for it.
-          # FIVE distinguishable states, and each gets its OWN message. The
-          # listing is SPLIT from the sort rather than piped, because a pipeline
-          # takes only the rightmost status and conflates them:
-          #   1. no image / daemon unreachable  -> the inspect below
-          #   2. /app/bots absent               -> `ls -1A` exits non-zero
-          #   3. present but empty              -> exit 0, no output
-          #   4. present, set mismatch          -> the comparison below
-          #   5. present, set matches           -> the per-bot loop below
-          #
-          # A previous round reached for `set -o pipefail` here instead. It was
-          # inert for the pipeline its comment named (the per-bot `docker run |
-          # jq`: jq is rightmost and already exits non-zero on bad input,
-          # measured identical with and without), and it silenced state 2
-          # ENTIRELY — `bash -e` aborted on this line before the
-          # "overlay did not land" message could be printed, leaving a red step
-          # with no `::error::` annotation at all. State 2 is reachable:
-          # muninn's Dockerfile COPYs `bot[s]` as an OPTIONAL glob, so a second
-          # exclusion added upstream to `.dockerignore` passes the `grep -q`
-          # strip above and yields an image with no /app/bots.
-          #
-          # The round AFTER that one wrote this comment claiming five messages
-          # and shipped four: `if ! RAW=$(docker run …)` discards the status, so
-          # states 1 and 2 shared one. They are the two whose diagnosis differs
-          # most — "your daemon is broken" versus "go read upstream's
-          # .dockerignore" — so they are separated here by asking about the
-          # image FIRST. Deliberately not by branching on docker's exit code: a
-          # missing image is 125 but an unreachable daemon is 1, so an exit-code
-          # case would have misfiled the very state it was added to name.
-          [ -n "$IMG" ] || {
-            echo "::error::nais/docker-build-push produced no image reference — the non-push call is expected to set outputs.image"; exit 1
-          }
-          docker image inspect "$IMG" > /dev/null 2>&1 || {
-            echo "::error::docker cannot inspect $IMG — the daemon is unreachable, or the build did not load the image locally"; exit 1
-          }
-          RAW=$(docker run --rm --entrypoint sh "$IMG" -c 'ls -1A /app/bots') || {
-            echo "::error::/app/bots is absent from the image — the Dockerfile COPYs bots/ through an optional glob, so an image without it builds green"; exit 1
-          }
+          # Exit 3 is the script's own "no /app/bots"; anything else non-zero is
+          # docker or bun failing to run at all. Different fixes, so different
+          # messages.
+          rc=0
+          RAW=$(docker run --rm --entrypoint bun "$IMG" -e '
+            const fs = require("fs");
+            let entries;
+            try { entries = fs.readdirSync("/app/bots"); } catch { process.exit(3); }
+            for (const e of entries) console.log(e);
+          ') || rc=$?
+          case "$rc" in
+            0) ;;
+            3) echo "::error::/app/bots is absent from the image"; exit 1 ;;
+            *) echo "::error::could not run bun in $IMG (exit $rc)"; exit 1 ;;
+          esac
           GOT=$(printf '%s\n' "$RAW" | sort)
-          # Same split, same reason, and it is NOT dead symmetry: `ls | sort`
-          # here would report a missing deploy/bots as "not this repo's bot set"
-          # (ls exits 2, sort exits 0, WANT empty). The -d check three steps
-          # earlier makes that unreachable today — but leaving the shape intact
-          # teaches the next reader that the shape is fine, which is how the
-          # line above got written.
           WANT_RAW=$(ls -1A deploy/bots) || {
             echo "::error::could not list deploy/bots — the checkout is not what this workflow expects"; exit 1
           }
@@ -581,85 +554,146 @@ jobs:
           echo "got:  $GOT"
           [ -n "$GOT" ] || { echo "::error::/app/bots is empty — the overlay did not land"; exit 1; }
           [ "$GOT" = "$WANT" ] || { echo "::error::/app/bots is not this repo's bot set"; exit 1; }
-          # Asserted on the IMAGE, not only on deploy/bots/ — the connector is
-          # the property that decides whether a turn can run at all, and a
-          # source-tree check cannot see what the build actually baked.
-          # NB "the image" here is the BUILT image BEFORE it is pushed: this
-          # runs against the `push_image: "false"` call's locally-loaded
-          # export. Nothing ties it to the pushed artifact — see the `pull`
-          # comment on the push call, which is the honest statement of that
-          # gap. An earlier draft of this comment said the asserted image is
-          # "the artifact that is pushed and deployed", which erased exactly
-          # that caveat one screen above the place it is made.
           for bot in $WANT; do
-            docker run --rm --entrypoint sh "$IMG" \
-              -c "test -f /app/bots/$bot/CLAUDE.md && test -s /app/bots/$bot/CLAUDE.md" \
-              || { echo "::error::$bot has no usable CLAUDE.md in the image — discoverAllBots would exit 1"; exit 1; }
-            docker run --rm --entrypoint sh "$IMG" -c "cat /app/bots/$bot/config.json" \
-              | jq -e -s 'length == 1 and (.[0].connector | . == "copilot-sdk" or . == "openai-compat" or . == "claude-sdk")' > /dev/null \
+            docker run --rm -e BOT="$bot" --entrypoint bun "$IMG" -e '
+              const s = require("fs").statSync(`/app/bots/${process.env.BOT}/CLAUDE.md`, { throwIfNoEntry: false });
+              process.exit(s && s.isFile() && s.size > 0 ? 0 : 1);
+            ' || { echo "::error::$bot has no usable CLAUDE.md in the image — discoverAllBots would exit 1"; exit 1; }
+            docker run --rm -e BOT="$bot" --entrypoint bun "$IMG" -e '
+              process.stdout.write(require("fs").readFileSync(`/app/bots/${process.env.BOT}/config.json`));
+            ' | jq -e -s 'length == 1 and (.[0].connector | . == "copilot-sdk" or . == "openai-compat" or . == "claude-sdk")' > /dev/null \
               || { echo "::error::$bot in the IMAGE has no usable pinned connector — it would fall back to claude-cli, which this image does not carry"; exit 1; }
           done
 
-      - name: The image carries no CLI and no ffmpeg
+      # Checked on PATH, which includes /bin and /usr/bin. A shell is on the
+      # list because the runtime choice is what removed it: its return means
+      # the runtime stage stopped being the DHI image.
+      - name: The image carries no shell, curl, CLI or ffmpeg
         env:
-          IMG: ${{ steps.docker-assert.outputs.image }}
+          IMG: ${{ steps.docker-push.outputs.image }}
         run: |
-          if docker run --rm --entrypoint sh "$IMG" -c 'command -v claude'; then
-            echo "::error::the Claude CLI is in the image"; exit 1
-          fi
-          if docker run --rm --entrypoint sh "$IMG" -c 'command -v ffmpeg'; then
-            echo "::error::ffmpeg is in the image"; exit 1
+          rc=0
+          FOUND=$(docker run --rm --entrypoint bun "$IMG" -e '
+            const fs = require("fs");
+            const dirs = (process.env.PATH ?? "").split(":");
+            const found = ["sh", "bash", "curl", "ffmpeg", "claude"]
+              .filter((b) => dirs.some((d) => fs.existsSync(`${d}/${b}`)));
+            if (found.length) { console.log(found.join(" ")); process.exit(1); }
+          ') || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            [ -n "$FOUND" ] && { echo "::error::the image carries: $FOUND"; exit 1; }
+            echo "::error::could not run bun in $IMG (exit $rc)"; exit 1
           fi
 
-      # The bake is silent when it fails at build time (warmupEmbeddings catches
-      # and logs), so the image is where it gets checked. The pod's half of this
-      # is the `Embedding model ready` boot line, not a second file test.
-      - name: The embedding model is baked
+      # As the image's own user (65532) and WITHOUT --read-only, so this tests
+      # ownership, not the pod's filesystem flag. A WORKDIR placed before the
+      # COPY in build/Dockerfile.nais makes /app 65532's (measured).
+      - name: The app user cannot write under /app
         env:
-          IMG: ${{ steps.docker-assert.outputs.image }}
+          IMG: ${{ steps.docker-push.outputs.image }}
         run: |
-          docker run --rm --entrypoint sh "$IMG" \
-            -c 'test -s node_modules/@huggingface/transformers/.cache/Xenova/all-MiniLM-L6-v2/onnx/model_quantized.onnx' \
-            || { echo "::error::WITH_EMBEDDINGS=true produced no model weights"; exit 1; }
+          rc=0
+          OUT=$(docker run --rm --entrypoint bun "$IMG" -e '
+            const fs = require("fs");
+            const writable = [];
+            const walk = (p) => {
+              try { fs.accessSync(p, fs.constants.W_OK); writable.push(p); } catch {}
+              if (fs.lstatSync(p).isDirectory()) for (const e of fs.readdirSync(p)) walk(`${p}/${e}`);
+            };
+            walk("/app");
+            if (writable.length) { console.log(`${writable.length} writable, e.g. ${writable.slice(0, 5).join(" ")}`); process.exit(1); }
+          ') || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            [ -n "$OUT" ] && { echo "::error::the app user can write under /app: $OUT"; exit 1; }
+            echo "::error::could not run bun in $IMG (exit $rc)"; exit 1
+          fi
 
-      # `team`, `docker_context`, `build_args` and `tag` are repeated VERBATIM.
-      # That identity is the only thing tying the asserted image to the pushed
-      # one — a second call missing the three build args would push an image
-      # sharing nothing with the one that passed. Digest equality cannot be the
-      # backstop: a type=docker export and a pushed OCI image are different
-      # artifacts. The push reuses the shared type=gha cache, so this is fast.
-      # `team`, `docker_context`, `build_args`, `tag` and `salsa` are IDENTICAL
-      # to the assert call. The calls differ in exactly three inputs, all three
-      # deliberate: `push_image`, `outputs`, and `pull`.
+      # A real embedding, under the pod's constraints: no network (the model
+      # must come from the build), a read-only root filesystem, and UID 1069,
+      # the user nais runs the container as. A present model file does not
+      # prove the native ONNX binding loads in this runtime; this does.
+      - name: The baked embedding model produces a vector offline
+        env:
+          IMG: ${{ steps.docker-push.outputs.image }}
+        run: |
+          docker run --rm --network none --read-only --user 1069:1069 --entrypoint bun "$IMG" -e '
+            const { generateEmbedding } = await import("/app/src/ai/embeddings.ts");
+            const v = await generateEmbedding("medlemskap i folketrygden");
+            const ok = Array.isArray(v) && v.length === 384 && v.every(Number.isFinite) && v.some((x) => x !== 0);
+            console.log(`length=${v?.length} ok=${ok}`);
+            process.exit(ok ? 0 : 1);
+          ' || { echo "::error::the embedding model did not produce a 384-dimensional vector offline, read-only, as UID 1069"; exit 1; }
+
+      # The ENTRYPOINT itself, in the pushed artifact: with no reachable
+      # database it must refuse with require-provisioned's "could not ask"
+      # code (2), passed through, and say so in build/nais-entrypoint.ts's own
+      # words. The exit code alone does not identify the entrypoint: upstream's
+      # shell entrypoint also exits 2 here (measured against the previous Q2
+      # image). Costs the script's 30 s connect budget.
+      - name: The entrypoint refuses to start without a database
+        env:
+          IMG: ${{ steps.docker-push.outputs.image }}
+        run: |
+          rc=0
+          OUT=$(docker run --rm --network none --read-only --user 1069:1069 \
+            -e DB_URL=postgresql://muninn:muninn@unreachable.invalid:5432/muninn "$IMG" 2>&1) || rc=$?
+          printf '%s\n' "$OUT"
+          [ "$rc" -eq 2 ] || { echo "::error::expected the entrypoint to exit 2 with no reachable database, got $rc"; exit 1; }
+          printf '%s\n' "$OUT" | grep -qF '[entrypoint] db/require-provisioned.ts failed (exit 2)' || {
+            echo "::error::exit 2, but not from build/nais-entrypoint.ts — the image is not running the reviewed entrypoint"; exit 1
+          }
+
+      # The deploy gate. Stops on ANY Critical, and on a High that has a fixed
+      # version. A High with no fix is reported, not stopped on: the DHI
+      # runtime carries two (libacl1, libsystemd0) that no rebuild can clear.
+      # No global ignore-unfixed, so an unfixed Critical still stops.
       #
-      # `pull: "false"` is the one that is about correctness rather than about
-      # pushing. The action defaults it to "true", which passes `--pull` to
-      # buildx: if the base image tag (`oven/bun:1-debian`) is republished in
-      # the minutes between the two calls, the push call resolves a different
-      # digest, every layer cache key changes, the whole chain rebuilds — and an
-      # image no `docker run` ever inspected is pushed and deployed, silently.
-      #
-      # ⚠️ It NARROWS that window; it does not close it, and NOTHING HERE CAN
-      # DETECT IT REGRESSING. There is no assertion tying the pushed artifact to
-      # the asserted one — digest equality cannot serve, since a type=docker
-      # export and a pushed OCI image are different artifacts — so deleting this
-      # line reproduces the defect with every step green. The shape that would
-      # close it is the documented fallback: a third job that pulls the pushed
-      # image and re-runs the assertions against it. Recorded rather than
-      # pretended, like the `outputs: type=docker` note above.
-      - name: Push the asserted image to GAR
-        id: docker-push
-        uses: nais/docker-build-push@v0
+      # Scans the pulled digest through `docker save`, not the daemon socket:
+      # the socket path failed on a containerd image store when this was
+      # measured. A scanner error, an empty report or an undetected OS stops
+      # the deploy too; "no findings" must come from a scan that ran.
+      - name: Scan the pushed image; stop on Critical and fixable High
+        env:
+          IMG: ${{ steps.docker-push.outputs.image }}
+        run: |
+          DIR="$RUNNER_TEMP/trivy"
+          mkdir -p "$DIR/cache" || { echo "::error::could not create $DIR"; exit 1; }
+          docker save "$IMG" -o "$DIR/image.tar" || { echo "::error::could not export $IMG for scanning"; exit 1; }
+          docker run --rm -v "$DIR:/work" -v "$DIR/cache:/root/.cache" "$TRIVY_IMAGE" \
+            image --input /work/image.tar --scanners vuln --format json --output /work/report.json --timeout 15m || {
+            echo "::error::trivy failed — no report, so no deploy"; exit 1
+          }
+          docker run --rm -v "$DIR/cache:/root/.cache" "$TRIVY_IMAGE" version --format json > "$DIR/version.json" || {
+            echo "::error::could not read trivy's database metadata"; exit 1
+          }
+          jq -r '"trivy \(.Version), vulnerability DB updated \(.VulnerabilityDB.UpdatedAt)"' "$DIR/version.json"
+
+          jq -e -s 'length == 1 and (.[0].Metadata.OS.Family // "" | length > 0) and (.[0].Results // [] | length > 0)' "$DIR/report.json" > /dev/null || {
+            echo "::error::the trivy report is empty or detected no OS — refusing to treat it as clean"; exit 1
+          }
+          jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or .Severity == "HIGH")
+                 | [.Severity, .PkgName, .InstalledVersion, .VulnerabilityID, (.FixedVersion // "" | if . == "" then "no fix" else . end)] | @tsv' \
+            "$DIR/report.json"
+          BLOCKING=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL" or (.Severity == "HIGH" and (.FixedVersion // "") != ""))] | length' "$DIR/report.json") || {
+            echo "::error::could not evaluate the trivy report"; exit 1
+          }
+          if [ "$BLOCKING" -ne 0 ]; then
+            echo "::error::$BLOCKING Critical or fixable High finding(s) in $IMG — not deploying"; exit 1
+          fi
+          echo "no Critical and no fixable High in $IMG"
+
+      # Never the reason a clean scan does not deploy: an artifact-service
+      # failure here would otherwise skip the deploy below.
+      - name: Keep the scan report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          team: ${{ env.TEAM }}
-          docker_context: ./muninn
-          tag: muninn-${{ env.MUNINN_SHA }}
-          pull: "false"
-          build_args: |
-            WITH_MEDIA=false
-            WITH_CLI=false
-            WITH_EMBEDDINGS=true
-          salsa: true
+          name: trivy-${{ env.MUNINN_SHA }}
+          path: |
+            ${{ runner.temp }}/trivy/report.json
+            ${{ runner.temp }}/trivy/version.json
+          if-no-files-found: ignore
 
       - name: Deploy to nais
         uses: nais/deploy/actions/deploy@v2
@@ -667,11 +701,8 @@ jobs:
           CLUSTER: ${{ inputs.cluster }}
           RESOURCE: deploy/nais/app.yaml
           VARS: deploy/nais/vars-q2.json
-          # The PUSH call's id, never the assertion call's: only a pushed build
-          # gets `@sha256:…` appended (the action gates that on
-          # push_image == 'true'), so wiring this from the assertion call would
-          # deploy an un-digest-pinned tag while every assertion above still
-          # passed. Without this line `app.yaml`'s `image: {{ image }}` renders
+          # The same digest reference every check above pulled and scanned.
+          # Without this line `app.yaml`'s `image: {{ image }}` renders
           # unresolved.
           IMAGE: ${{ steps.docker-push.outputs.image }}
           # ONE comma-separated input, not one per value. Two `VAR:` keys in one

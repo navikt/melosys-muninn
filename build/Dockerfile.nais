@@ -1,0 +1,57 @@
+# The NAV build of public muninn, on Docker Hardened Images (DHI) Bun, Debian 13.
+#
+# Replaces muninn's own Dockerfile for this deployment only. Compose keeps
+# building upstream's. The build context is the muninn checkout after the
+# workflow's overlay: this repo's bots/ and build/nais-entrypoint.ts are copied
+# in, and `bots/` is stripped from .dockerignore.
+#
+# Both base images are MIRRORS in the team's GAR, pinned by digest. CI has no
+# dhi.io credential; see docs/runtime-image.md for the mirror command and for
+# how to move a digest. Build and runtime come from the same DHI release, so the
+# native modules bun installs against glibc here load there.
+#
+# The workflow pins the sha256 of upstream's whole Dockerfile and entrypoint,
+# and its start script (build/upstream-dockerfile-pin.txt). Any upstream change
+# to them stops the deploy until it is mirrored here and re-pinned.
+
+# --- build: has a shell and a package manager; nothing from it ships but /app ---
+FROM europe-north1-docker.pkg.dev/nais-management-233d/teammelosys/dhi-bun:1.4.2-debian13-dev@sha256:8b73e8388f1a1ae32b9f88004184c0462e5a5c15080ff5aef1b4fb94d8f880bf AS build
+WORKDIR /app
+
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production
+
+# The embedding model, baked through the one loader that throws (upstream's
+# Dockerfile explains both choices). The runtime has no egress to the model host.
+COPY src/logging.ts ./src/logging.ts
+COPY src/ai/embeddings.ts ./src/ai/embeddings.ts
+RUN bun -e 'const { loadEmbeddingModel } = await import("./src/ai/embeddings.ts"); \
+            await loadEmbeddingModel(); \
+            console.log("[build] embedding model baked");'
+
+COPY src ./src
+COPY db ./db
+COPY tsconfig.json ./
+# Not upstream's optional `bot[s]` glob: this image is useless without the
+# overlay, so a missing bots/ fails the build here.
+COPY bots ./bots/
+COPY nais-entrypoint.ts ./
+
+# --- runtime: no shell, no package manager, non-root (65532) ---
+FROM europe-north1-docker.pkg.dev/nais-management-233d/teammelosys/dhi-bun:1.4.2-debian13@sha256:db865526a0b05564a3aa114f17e0eafe6d83cbdc50451d7d7dfb7c632368d8fd
+# COPY before WORKDIR: a WORKDIR created first is owned by the image user
+# (65532), so the app could write into /app. Created by COPY, /app is root's.
+# The pod also runs with a read-only root filesystem (LOG_DIR=none).
+COPY --from=build /app /app
+WORKDIR /app
+
+# Upstream's image pins these; the app defaults (3010, 127.0.0.1) are
+# unreachable in a pod.
+ENV DASHBOARD_PORT=3000
+ENV DASHBOARD_HOST=0.0.0.0
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+  CMD ["bun", "-e", "const p = process.env.DASHBOARD_PORT || 3000; const r = await fetch('http://127.0.0.1:' + p + '/api/live'); if (!r.ok) process.exit(1);"]
+
+ENTRYPOINT ["bun", "/app/nais-entrypoint.ts"]

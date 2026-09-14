@@ -145,6 +145,7 @@ is exactly ONE json object pinning `connector` to `copilot-sdk`,
 | no `[ -n "$IMG" ]` before the assertions | With an empty image reference the whole step **passed**, asserting nothing about any artifact — measured against a shim. `outputs.image` on the non-push call being set is a documented assumption of `nais/docker-build-push@v0`, and an assumption a guard is built on has to be checked by that guard. |
 | `WANT=$(ls -1A deploy/bots \| sort)` | The same status conflation as the row above, on the other side of the comparison, left in place one line below where it had just been split apart. Unreachable today (`deploy/bots` is `-d`-checked three steps earlier) — recorded because leaving the shape intact is what teaches the next reader that the shape is fine, which is how it got written the first time. |
 | `echo "MUNINN_SHA=$(git … rev-parse HEAD)" >> "$GITHUB_ENV"` | **The status of `echo "X=$(cmd)" >> file` is ECHO'S, never the substitution's** — so a failing `rev-parse` exported an EMPTY value and the step went GREEN. Measured: `fatal: not a git repository`, step rc 0, `GITHUB_ENV` carrying `MUNINN_SHA=`. Downstream that is `tag: muninn-` on both `docker-build-push` calls and `muninn_ref=` rendered into the DEPLOYED MANIFEST, with every assertion in the file still passing — the only write here whose silent failure reaches the cluster. A sweep that claimed to have enumerated every write cleared this one by reading it. Assign, check, then export; the shape check is 40 hex through `jq` and slurped (`-Rs`), since the non-slurped form judges only the last line. |
+| *(DHI runtime)* the image-side rows above | The `ls -1A`, `set -o pipefail`, `docker run … 'ls -1A /app/bots'` and inspect-first rows describe the shell-based image step. The runtime has no shell now, so the step lists `/app/bots` with `bun -e` `readdirSync`, which includes dot-entries as `ls -1A` did. Exit 3 means "no `/app/bots`"; any other failure is one message, "could not run bun", so a missing image and a broken daemon are no longer told apart there. The `pull` step before it fails first when the image is missing. |
 | `rm -rf muninn/bots` / `mkdir -p` / `cp -R deploy/bots/.` | Three unguarded writes in the overlay step, **missed by the Class-A sweep that rewrote that very step** while claiming to have enumerated every write in the file. `cp` failing measured at rc 1 with ZERO annotations. They are also what a read-only `muninn/` hits first, which is why the sweep's headline claim — that its `mktemp`/`mv` "names" that state — was false: the step dies here and never reaches that line. Specifically at `rm -rf`, not `mkdir -p`: `actions/checkout` of public muninn always leaves `muninn/bots` present (`git ls-tree fb5e6b5d bots/` → `bots/CLAUDE.md`, `bots/jarvis`; the same tree object at the August floor and at main), so the `rm` always has something to remove. The first correction named `mkdir` because its fixture had no `muninn/bots` — the un-representative-fixture failure above, committed alongside the note warning about it. |
 | `grep -v '^bots/$' … > /tmp/di && mv /tmp/di …` | **The rest of the temp-file class, missed by the sweep that condemned `$$`.** Fixed `/tmp` path, no uniqueness, no `trap`, no `::error::`. Measured with `muninn/` at mode 500: rc 1, `Permission denied` on stderr, **zero annotations**, and `.dockerignore` left UNSTRIPPED so the overlay would not land. It survives `set -e` because `-e` is exempt for the non-final command of an `&&` list. Second defect in the same line: **`grep -v` exits 1 when it selects no lines** — a `.dockerignore` whose only entry is `bots/` — so the `&& mv` never ran, the exclusion survived, and the step died on the list's status with nothing printed. Treat exit 1 as a legitimate empty result and only >1 as an error. |
 | `cat "$STRIPPED" > muninn/.dockerignore` | *Written and reverted during the fix above, before commit.* `cat >` truncates the TARGET, so it refuses a read-only `.dockerignore` that the previous `mv` form replaced without complaint — a stricter failure on a state that works today, i.e. the repair injecting its own defect. `mv` keeps the behaviour and gains the annotation. Measured four ways: read-only file, `bots/`-only file, happy path, and a missing `RUNNER_TEMP`. (A fifth, "read-only dir", was listed here and is not a measurement of this line at all — that state never reaches it — see the `rm -rf muninn/bots` row above.) |
@@ -155,18 +156,18 @@ generally. On **this pod** the connector is mandatory, and muninn's own nais
 boot line says so: *"every bot on this deployment must be pinned to a non-CLI
 connector"* — the profile's CLI refusal lives in `spawnHaiku` and covers the
 Haiku router, the watchers and the scheduler, but **not the chat connector**.
-`resolveConnector` is `botConfig.connector ?? "claude-cli"` and the image is
-built `WITH_CLI=false`, so an unpinned bot spawns a missing binary on every
+`resolveConnector` is `botConfig.connector ?? "claude-cli"` and
+`build/Dockerfile.nais` installs no Claude CLI, so an unpinned bot spawns a missing binary on every
 turn, in front of a colleague, with the whole pipeline green.
 
 The guard therefore checks the VALUE against the allowlist `copilot-sdk` /
 `openai-compat` / `claude-sdk` — which is `CONNECTOR_VALUES` minus `claude-cli`
 — and that single test covers unset, mistyped, explicitly-`claude-cli` and
-unparseable alike. It is asserted **twice**: on `deploy/bots/` before the build, and on the built
-IMAGE before it is pushed, because nothing else binds the source tree to the
-artifact. ⚠️ **Not on the pushed artifact** — that is a different image (the
-assertion call is `push_image: "false"`), and the workflow is explicit that
-nothing ties the two together; see the `pull` comment on the push call.
+unparseable alike. It is asserted **twice**: on `deploy/bots/` before the build, and on the
+pushed digest, pulled back from GAR, because nothing else binds the source tree
+to the artifact. The deploy uses that same digest reference. (Until the DHI
+runtime, the image assertions ran on a separate non-pushed build, and nothing
+tied it to the pushed one.)
 
 ⚠️ **The allowlist is hardcoded and has a maintenance obligation.** The day
 muninn gains a fifth connector, a correctly-pinned bot using it is refused here.
