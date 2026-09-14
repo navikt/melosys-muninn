@@ -101,6 +101,8 @@ version. Both are in Debian packages the runtime inherits:
 | CVE-2026-54369 | `libacl1` 2.3.2-2+dhi1 | affected, no fix |
 | CVE-2026-16742 | `libsystemd0` 257.13-1~deb13u1+dhi2 | affected, no fix |
 
+Docker Scout also rates `CVE-2026-85091` in `zlib1g` 1:1.3.dfsg+really1.3.1-1+dhi3 as High, with no fix. Trivy rates it Medium, so the gate does not see it as High. Measured on the first DHI deploy, 2026-09-14.
+
 Owner: `@navikt/teammelosys`. Next review: 2026-10-15.
 
 Docker Scout reported 0 High for the DHI base, most likely because it applies
