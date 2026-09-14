@@ -7,9 +7,11 @@ in exactly one place: `MUNINN_REPO` in `.github/workflows/deploy.yml`.
 
 **Nothing here is a fork.** The image is built from public muninn at a pinned
 ref — a tag, or a full 40-character commit SHA — with this repo's `bots/` folder
-overlaid into the build context. There is no patched Dockerfile and no vendored
-source. Public muninn carries no tags today, so in practice the first deploy
-names a SHA; see the deploy section below.
+overlaid into the build context. There is no vendored source. The Dockerfile is
+this repo's own `build/Dockerfile.nais` (hardened, shell-free runtime), which
+mirrors upstream's and stops the deploy when upstream's build or entrypoint
+changes; see `docs/runtime-image.md`. Public muninn carries no tags today, so in
+practice the first deploy names a SHA; see the deploy section below.
 
 ## Why `CLAUDE.md` and `claude-cli` appear in this repo
 
@@ -21,8 +23,8 @@ members of its connector enum; `CLAUDE_CODE_USE_VERTEX` and
 sets them — every occurrence is a comment or a doc line explaining the absence.
 
 This pod runs none of those paths. The bot pins `openai-compat` against Vertex,
-and the image is built `--build-arg WITH_CLI=false`, so it carries no `claude`
-binary at all — `deploy.yml` asserts both against the built image before it
+and `build/Dockerfile.nais` installs no Claude CLI, so it carries no `claude`
+binary at all — `deploy.yml` asserts both against the pushed image before it
 deploys. `docs/bot-folder-notes.md` §2 says what the connector pin buys.
 
 The names stay as upstream spells them. A local rename would leave the guards
@@ -38,7 +40,7 @@ to prevent.
 | `bots/melosys/` | The bot: persona, `config.json`, an empty `.mcp.json`. Copied into `bots/` in the build context. |
 | `.github/workflows/deploy.yml` | Check out muninn at a pinned ref → resolve it to a SHA → assign the Vertex base URL → overlay → build and push → pull the digest → assert → scan → deploy. |
 | `build/Dockerfile.nais` + `build/nais-entrypoint.ts` | The deployed image: Docker Hardened Images Bun, no shell, and a shell-free entrypoint. See `docs/runtime-image.md`. |
-| `build/upstream-copy-lines.txt` | Upstream's Dockerfile COPY lines as last mirrored. The workflow stops when they change. |
+| `build/upstream-dockerfile-pin.txt` | Upstream's Dockerfile COPY, ENTRYPOINT and CMD lines and its entrypoint's sha256, as last mirrored. The workflow stops when they change. |
 | `nais/step-zero/` | The stub `Application` and its own vars file, for proving the WebSocket upgrade **before** buying Cloud SQL and the GCP project. |
 | `nais/provision-job.yaml` + `nais/provision-netpol.yaml` | The one-shot schema step, as a Naisjob. Applied by hand, not by a workflow — `kubectl debug` is unavailable to the team and the job needs a NetworkPolicy nais will not generate for it. See `docs/db-setup.md`. |
 | `.github/workflows/step-zero.yml` | Builds the echo image → pushes it → applies the stub. Deliberately separate from `deploy.yml`, which refuses while `vars-q2.json` holds a `REPLACE_ME`. |

@@ -464,18 +464,22 @@ jobs:
             echo "::error::could not install the stripped .dockerignore over muninn/.dockerignore"; exit 1
           }
 
-      # build/Dockerfile.nais replaces upstream's Dockerfile, so an upstream
-      # COPY it does not mirror would ship an image missing that path, green.
-      # The checked-in list is upstream's COPY lines as last reviewed; any
-      # difference stops the deploy until someone mirrors or drops the change.
-      # It sees COPY lines only: a new upstream ENV or RUN is not caught here.
-      - name: build/Dockerfile.nais still mirrors upstream's COPY lines
+      # build/Dockerfile.nais and build/nais-entrypoint.ts replace upstream's
+      # Dockerfile and shell entrypoint, so an upstream change to either would
+      # ship without them, green. The pin holds upstream's COPY, ENTRYPOINT and
+      # CMD lines and the sha256 of scripts/docker-entrypoint.sh as last
+      # mirrored; any difference stops the deploy until someone mirrors or
+      # drops the change. A new upstream ENV or RUN is not caught here.
+      - name: build/Dockerfile.nais still mirrors upstream's build and entrypoint
         run: |
-          GOT=$(grep '^COPY' muninn/Dockerfile) || {
-            echo "::error::no COPY lines found in muninn/Dockerfile — upstream's build has moved"; exit 1
+          LINES=$(grep -E '^(COPY|ENTRYPOINT|CMD)' muninn/Dockerfile) || {
+            echo "::error::no COPY, ENTRYPOINT or CMD lines in muninn/Dockerfile — upstream's build has moved"; exit 1
           }
-          if ! printf '%s\n' "$GOT" | diff -u deploy/build/upstream-copy-lines.txt -; then
-            echo "::error::upstream's Dockerfile COPY lines changed — mirror the change in build/Dockerfile.nais, then update build/upstream-copy-lines.txt"; exit 1
+          HASH=$(sha256sum muninn/scripts/docker-entrypoint.sh) || {
+            echo "::error::muninn/scripts/docker-entrypoint.sh is gone or unreadable — re-check build/nais-entrypoint.ts against upstream's startup"; exit 1
+          }
+          if ! printf '%s\nsha256 %s\n' "$LINES" "${HASH%% *}" | diff -u deploy/build/upstream-dockerfile-pin.txt -; then
+            echo "::error::upstream's Dockerfile or entrypoint changed — mirror it in build/Dockerfile.nais or build/nais-entrypoint.ts, then update build/upstream-dockerfile-pin.txt"; exit 1
           fi
 
       # ONE build, and it pushes. Every check below runs against the pushed
@@ -649,8 +653,11 @@ jobs:
           fi
           echo "no Critical and no fixable High in $IMG"
 
+      # Never the reason a clean scan does not deploy: an artifact-service
+      # failure here would otherwise skip the deploy below.
       - name: Keep the scan report
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: trivy-${{ env.MUNINN_SHA }}

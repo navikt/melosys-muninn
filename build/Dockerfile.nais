@@ -40,10 +40,11 @@ COPY nais-entrypoint.ts ./
 
 # --- runtime: no shell, no package manager, non-root (65532) ---
 FROM europe-north1-docker.pkg.dev/nais-management-233d/teammelosys/dhi-bun:1.4.2-debian13@sha256:db865526a0b05564a3aa114f17e0eafe6d83cbdc50451d7d7dfb7c632368d8fd
-WORKDIR /app
-# Owned by root and not writable by the app user. The pod runs with a read-only
-# root filesystem, and nothing under /app is written at runtime (LOG_DIR=none).
+# COPY before WORKDIR: a WORKDIR created first is owned by the image user
+# (65532), so the app could write into /app. Created by COPY, /app is root's.
+# The pod also runs with a read-only root filesystem (LOG_DIR=none).
 COPY --from=build /app /app
+WORKDIR /app
 
 # Upstream's image pins these; the app defaults (3010, 127.0.0.1) are
 # unreachable in a pod.

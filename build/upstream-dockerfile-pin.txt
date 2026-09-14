@@ -6,3 +6,6 @@ COPY db ./db
 COPY scripts/docker-entrypoint.sh ./scripts/
 COPY tsconfig.json ./
 COPY bot[s] ./bots/
+ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
+CMD ["bun", "run", "start"]
+sha256 c680be9b0904ce4587e334cf4cdb338ae9bc82482aea0fc9827884e5377f0565

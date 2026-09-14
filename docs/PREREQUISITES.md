@@ -335,15 +335,15 @@ nais egress is default-deny, so every external host is enumerated. Four notes:
   on a 700 ms budget. The assumption is that GKE metadata is node-local and
   therefore outside `accessPolicy` altogether. Write it down rather than
   rediscover it: the fallback when that fetch fails is the **`gcloud` CLI**,
-  which this image does not carry under any build arg (`WITH_CLI` gates the
-  *Claude* CLI installer; the Google Cloud SDK is never installed), so the
+  which this image does not carry (`build/Dockerfile.nais` installs neither the
+  Claude CLI nor the Google Cloud SDK), so the
   failure surfaces as an error message telling an operator to run
   `gcloud auth application-default login` — nonsense inside a pod, and pointing
   away from the real cause.
 - `texas.nais.io/enabled: "true"` is already set. Without it
   `NAIS_TOKEN_INTROSPECTION_ENDPOINT` is never injected and muninn's boot assert
   fires — a refusal, not a crash, but the pod does not start.
-- The embedding model is **baked into the image** (`WITH_EMBEDDINGS=true`), so it
+- The embedding model is **baked into the image** (always, in `build/Dockerfile.nais`), so it
   needs no runtime egress host. That is deliberate: `warmupEmbeddings()` catches
   its own failure, so a pod that cannot reach the model host looks healthy while
   every memory search silently returns nothing. The requirement moves to the

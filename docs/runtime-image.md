@@ -20,7 +20,7 @@ the embedding model depends on it.
 | Stage | Image | What it has |
 |---|---|---|
 | build | `dhi-bun:1.4.2-debian13-dev` | Shell, package manager, root. Runs `bun install` and bakes the model. |
-| runtime | `dhi-bun:1.4.2-debian13` | Bun, CA certificates, coreutils. No shell, no package manager, user 65532. |
+| runtime | `dhi-bun:1.4.2-debian13` | Bun, CA certificates, coreutils, `openssl`, and the `debconf`/`dpkg-reconfigure` helpers. No shell, no apt, user 65532. |
 
 Both come from the same DHI release, so the native modules installed in the
 build stage load in the runtime stage.
@@ -67,14 +67,18 @@ every check against that digest. The deploy uses the same reference.
 
 | Check | Stops the deploy when |
 |---|---|
-| Upstream COPY parity | `muninn/Dockerfile`'s COPY lines differ from `build/upstream-copy-lines.txt`. |
+| Upstream parity | `muninn/Dockerfile`'s COPY, ENTRYPOINT or CMD lines, or the sha256 of `scripts/docker-entrypoint.sh`, differ from `build/upstream-dockerfile-pin.txt`. |
 | Bot set | `/app/bots` is absent, empty, or not exactly this repo's `bots/`, or a bot lacks a `CLAUDE.md` or a non-CLI connector. |
 | Binaries | `sh`, `bash`, `curl`, `ffmpeg` or `claude` is on `PATH`. |
 | Embedding | The model does not return a 384-dimensional vector with no network, a read-only root filesystem and UID 1069. |
-| Entrypoint | With no reachable database, the container exits with anything but 2. |
+| Entrypoint | With no reachable database, the container exits with anything but 2, or without `build/nais-entrypoint.ts`'s own refusal line. |
 | Trivy | Any Critical, any High with a fixed version, a scanner error, or a report with no OS detected. |
 
-The parity check reads COPY lines only. A new upstream `ENV` or `RUN` passes it.
+Trivy covers Debian packages and the npm tree under `node_modules`. It does not see inside the Bun binary or the prebuilt `.so` files that `onnxruntime-node` and `sharp` ship.
+
+The vulnerability database is downloaded on every run; nothing caches it. A registry rate limit on the download fails the scan, and the deploy with it.
+
+The parity check does not read `ENV`, `RUN` or `HEALTHCHECK` lines. A new one upstream passes it.
 
 ## Findings the gate lets through
 
@@ -88,8 +92,8 @@ version. Both are in Debian packages the runtime inherits:
 
 Owner: `@navikt/teammelosys`. Next review: 2026-10-15.
 
-Docker Scout reports 0 High for the same image, because it applies DHI's VEX
-statements. Trivy is the gate, so the report NAIS Console shows can differ from
+Docker Scout reported 0 High for the DHI base, most likely because it applies
+DHI's VEX statements; exporting the VEX failed, so that is not verified per CVE. Trivy is the gate, so the report NAIS Console shows can differ from
 the workflow's. Explain a difference per CVE, not in total.
 
 ## Debugging a pod without a shell
