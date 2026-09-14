@@ -299,8 +299,8 @@ jobs:
           # case. Assert the invariant this POD needs, per bot folder. muninn's
           # own nais boot line states it: "every bot on this deployment must be
           # pinned to a non-CLI connector" — the profile's CLI refusal covers
-          # spawnHaiku, NOT the chat connector, and the image is built
-          # WITH_CLI=false.
+          # spawnHaiku, NOT the chat connector, and build/Dockerfile.nais
+          # installs no Claude CLI.
           #
           # The connector is checked by VALUE, not by "config.json exists":
           # `resolveConnector` is `botConfig.connector ?? "claude-cli"`, and
@@ -465,21 +465,27 @@ jobs:
           }
 
       # build/Dockerfile.nais and build/nais-entrypoint.ts replace upstream's
-      # Dockerfile and shell entrypoint, so an upstream change to either would
-      # ship without them, green. The pin holds upstream's COPY, ENTRYPOINT and
-      # CMD lines and the sha256 of scripts/docker-entrypoint.sh as last
-      # mirrored; any difference stops the deploy until someone mirrors or
-      # drops the change. A new upstream ENV or RUN is not caught here.
+      # Dockerfile, shell entrypoint and `bun run start`, so any upstream change
+      # to those would ship without them, green. The pin holds the sha256 of
+      # the WHOLE upstream Dockerfile and entrypoint, and the start script,
+      # as last mirrored. Whole-file, not per-instruction: a line list missed
+      # USER, ENV, indented instructions and the start script in turn. A
+      # comment-only upstream edit stops the deploy too; re-pin after reading
+      # the diff (docs/runtime-image.md).
       - name: build/Dockerfile.nais still mirrors upstream's build and entrypoint
         run: |
-          LINES=$(grep -E '^(COPY|ENTRYPOINT|CMD)' muninn/Dockerfile) || {
-            echo "::error::no COPY, ENTRYPOINT or CMD lines in muninn/Dockerfile — upstream's build has moved"; exit 1
+          DF=$(sha256sum muninn/Dockerfile) || {
+            echo "::error::muninn/Dockerfile is gone or unreadable — upstream's build has moved"; exit 1
           }
-          HASH=$(sha256sum muninn/scripts/docker-entrypoint.sh) || {
+          EP=$(sha256sum muninn/scripts/docker-entrypoint.sh) || {
             echo "::error::muninn/scripts/docker-entrypoint.sh is gone or unreadable — re-check build/nais-entrypoint.ts against upstream's startup"; exit 1
           }
-          if ! printf '%s\nsha256 %s\n' "$LINES" "${HASH%% *}" | diff -u deploy/build/upstream-dockerfile-pin.txt -; then
-            echo "::error::upstream's Dockerfile or entrypoint changed — mirror it in build/Dockerfile.nais or build/nais-entrypoint.ts, then update build/upstream-dockerfile-pin.txt"; exit 1
+          START=$(jq -er '.scripts.start' muninn/package.json) || {
+            echo "::error::muninn/package.json has no scripts.start — re-check the server import in build/nais-entrypoint.ts"; exit 1
+          }
+          if ! printf 'sha256 Dockerfile %s\nsha256 scripts/docker-entrypoint.sh %s\nscripts.start %s\n' "${DF%% *}" "${EP%% *}" "$START" \
+              | diff -u deploy/build/upstream-dockerfile-pin.txt -; then
+            echo "::error::upstream's Dockerfile, entrypoint or start script changed — mirror it in build/Dockerfile.nais or build/nais-entrypoint.ts, then re-pin build/upstream-dockerfile-pin.txt"; exit 1
           fi
 
       # ONE build, and it pushes. Every check below runs against the pushed
@@ -576,6 +582,29 @@ jobs:
           ') || rc=$?
           if [ "$rc" -ne 0 ]; then
             [ -n "$FOUND" ] && { echo "::error::the image carries: $FOUND"; exit 1; }
+            echo "::error::could not run bun in $IMG (exit $rc)"; exit 1
+          fi
+
+      # As the image's own user (65532) and WITHOUT --read-only, so this tests
+      # ownership, not the pod's filesystem flag. A WORKDIR placed before the
+      # COPY in build/Dockerfile.nais makes /app 65532's (measured).
+      - name: The app user cannot write under /app
+        env:
+          IMG: ${{ steps.docker-push.outputs.image }}
+        run: |
+          rc=0
+          OUT=$(docker run --rm --entrypoint bun "$IMG" -e '
+            const fs = require("fs");
+            const writable = [];
+            const walk = (p) => {
+              try { fs.accessSync(p, fs.constants.W_OK); writable.push(p); } catch {}
+              if (fs.lstatSync(p).isDirectory()) for (const e of fs.readdirSync(p)) walk(`${p}/${e}`);
+            };
+            walk("/app");
+            if (writable.length) { console.log(`${writable.length} writable, e.g. ${writable.slice(0, 5).join(" ")}`); process.exit(1); }
+          ') || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            [ -n "$OUT" ] && { echo "::error::the app user can write under /app: $OUT"; exit 1; }
             echo "::error::could not run bun in $IMG (exit $rc)"; exit 1
           fi
 

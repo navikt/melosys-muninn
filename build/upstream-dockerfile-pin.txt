@@ -1,11 +1,3 @@
-COPY package.json bun.lock ./
-COPY src/logging.ts ./src/logging.ts
-COPY src/ai/embeddings.ts ./src/ai/embeddings.ts
-COPY src ./src
-COPY db ./db
-COPY scripts/docker-entrypoint.sh ./scripts/
-COPY tsconfig.json ./
-COPY bot[s] ./bots/
-ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
-CMD ["bun", "run", "start"]
-sha256 c680be9b0904ce4587e334cf4cdb338ae9bc82482aea0fc9827884e5377f0565
+sha256 Dockerfile eee6e35263647d2c3c2e552552f8644349f828d5b9952771b56dd729888a1a06
+sha256 scripts/docker-entrypoint.sh c680be9b0904ce4587e334cf4cdb338ae9bc82482aea0fc9827884e5377f0565
+scripts.start bun run src/index.ts

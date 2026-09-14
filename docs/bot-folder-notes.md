@@ -27,7 +27,7 @@ re-reading that sentence.
 ## 2. `connector` must be pinned, and must not be `claude-cli`
 
 `resolveConnector` falls back to `claude-cli` when a bot names no connector, and
-the nais image is built `--build-arg WITH_CLI=false` — there is no `claude`
+the nais image (`build/Dockerfile.nais`) installs no Claude CLI — there is no `claude`
 binary in it. muninn's `nais` profile refuses CLI spawns in `spawnHaiku`, which
 covers the Haiku router, the watchers and the scheduler — but **not the chat
 connector**. So an unpinned bot spawns a missing binary on every turn, and this

@@ -67,9 +67,10 @@ every check against that digest. The deploy uses the same reference.
 
 | Check | Stops the deploy when |
 |---|---|
-| Upstream parity | `muninn/Dockerfile`'s COPY, ENTRYPOINT or CMD lines, or the sha256 of `scripts/docker-entrypoint.sh`, differ from `build/upstream-dockerfile-pin.txt`. |
+| Upstream parity | The sha256 of upstream's `Dockerfile` or `scripts/docker-entrypoint.sh`, or its `scripts.start`, differs from `build/upstream-dockerfile-pin.txt`. |
 | Bot set | `/app/bots` is absent, empty, or not exactly this repo's `bots/`, or a bot lacks a `CLAUDE.md` or a non-CLI connector. |
 | Binaries | `sh`, `bash`, `curl`, `ffmpeg` or `claude` is on `PATH`. |
+| Ownership | The image's own user (65532) can write any path under `/app`. |
 | Embedding | The model does not return a 384-dimensional vector with no network, a read-only root filesystem and UID 1069. |
 | Entrypoint | With no reachable database, the container exits with anything but 2, or without `build/nais-entrypoint.ts`'s own refusal line. |
 | Trivy | Any Critical, any High with a fixed version, a scanner error, or a report with no OS detected. |
@@ -78,7 +79,14 @@ Trivy covers Debian packages and the npm tree under `node_modules`. It does not 
 
 The vulnerability database is downloaded on every run; nothing caches it. A registry rate limit on the download fails the scan, and the deploy with it.
 
-The parity check does not read `ENV`, `RUN` or `HEALTHCHECK` lines. A new one upstream passes it.
+The parity pin is whole-file, so a comment-only upstream edit also stops the deploy. Read the upstream diff, mirror what matters, then re-pin from the muninn checkout's root:
+
+```sh
+printf 'sha256 Dockerfile %s\nsha256 scripts/docker-entrypoint.sh %s\nscripts.start %s\n' \
+  "$(sha256sum Dockerfile | cut -d' ' -f1)" \
+  "$(sha256sum scripts/docker-entrypoint.sh | cut -d' ' -f1)" \
+  "$(jq -r .scripts.start package.json)" > ../deploy/build/upstream-dockerfile-pin.txt
+```
 
 ## Findings the gate lets through
 

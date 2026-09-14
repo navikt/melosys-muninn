@@ -10,10 +10,9 @@
 # how to move a digest. Build and runtime come from the same DHI release, so the
 # native modules bun installs against glibc here load there.
 #
-# Parity with upstream's Dockerfile is checked by the workflow, which compares
-# upstream's COPY lines against the list this file mirrors. An upstream COPY
-# that is not mirrored here fails the deploy rather than shipping an image
-# without it.
+# The workflow pins the sha256 of upstream's whole Dockerfile and entrypoint,
+# and its start script (build/upstream-dockerfile-pin.txt). Any upstream change
+# to them stops the deploy until it is mirrored here and re-pinned.
 
 # --- build: has a shell and a package manager; nothing from it ships but /app ---
 FROM europe-north1-docker.pkg.dev/nais-management-233d/teammelosys/dhi-bun:1.4.2-debian13-dev@sha256:8b73e8388f1a1ae32b9f88004184c0462e5a5c15080ff5aef1b4fb94d8f880bf AS build
