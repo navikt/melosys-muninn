@@ -156,8 +156,8 @@ generally. On **this pod** the connector is mandatory, and muninn's own nais
 boot line says so: *"every bot on this deployment must be pinned to a non-CLI
 connector"* — the profile's CLI refusal lives in `spawnHaiku` and covers the
 Haiku router, the watchers and the scheduler, but **not the chat connector**.
-`resolveConnector` is `botConfig.connector ?? "claude-cli"` and the image is
-built `WITH_CLI=false`, so an unpinned bot spawns a missing binary on every
+`resolveConnector` is `botConfig.connector ?? "claude-cli"` and
+`build/Dockerfile.nais` installs no Claude CLI, so an unpinned bot spawns a missing binary on every
 turn, in front of a colleague, with the whole pipeline green.
 
 The guard therefore checks the VALUE against the allowlist `copilot-sdk` /

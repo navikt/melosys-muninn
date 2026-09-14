@@ -40,7 +40,7 @@ to prevent.
 | `bots/melosys/` | The bot: persona, `config.json`, an empty `.mcp.json`. Copied into `bots/` in the build context. |
 | `.github/workflows/deploy.yml` | Check out muninn at a pinned ref → resolve it to a SHA → assign the Vertex base URL → overlay → build and push → pull the digest → assert → scan → deploy. |
 | `build/Dockerfile.nais` + `build/nais-entrypoint.ts` | The deployed image: Docker Hardened Images Bun, no shell, and a shell-free entrypoint. See `docs/runtime-image.md`. |
-| `build/upstream-dockerfile-pin.txt` | Upstream's Dockerfile COPY, ENTRYPOINT and CMD lines and its entrypoint's sha256, as last mirrored. The workflow stops when they change. |
+| `build/upstream-dockerfile-pin.txt` | The sha256 of upstream's whole `Dockerfile` and `scripts/docker-entrypoint.sh`, and its `scripts.start`, as last mirrored. The workflow stops when any of them changes. |
 | `nais/step-zero/` | The stub `Application` and its own vars file, for proving the WebSocket upgrade **before** buying Cloud SQL and the GCP project. |
 | `nais/provision-job.yaml` + `nais/provision-netpol.yaml` | The one-shot schema step, as a Naisjob. Applied by hand, not by a workflow — `kubectl debug` is unavailable to the team and the job needs a NetworkPolicy nais will not generate for it. See `docs/db-setup.md`. |
 | `.github/workflows/step-zero.yml` | Builds the echo image → pushes it → applies the stub. Deliberately separate from `deploy.yml`, which refuses while `vars-q2.json` holds a `REPLACE_ME`. |

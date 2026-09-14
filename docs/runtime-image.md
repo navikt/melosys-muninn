@@ -79,14 +79,17 @@ Trivy covers Debian packages and the npm tree under `node_modules`. It does not 
 
 The vulnerability database is downloaded on every run; nothing caches it. A registry rate limit on the download fails the scan, and the deploy with it.
 
-The parity pin is whole-file, so a comment-only upstream edit also stops the deploy. Read the upstream diff, mirror what matters, then re-pin from the muninn checkout's root:
+The parity pin is whole-file, so a comment-only upstream edit also stops the deploy. Read the upstream diff and mirror what matters. Then re-pin from the root of a muninn checkout at the `muninn_ref` you deploy, writing into this repo's `build/`:
 
 ```sh
+DEPLOY_REPO=../muninn-nais   # this repo's checkout
 printf 'sha256 Dockerfile %s\nsha256 scripts/docker-entrypoint.sh %s\nscripts.start %s\n' \
   "$(sha256sum Dockerfile | cut -d' ' -f1)" \
   "$(sha256sum scripts/docker-entrypoint.sh | cut -d' ' -f1)" \
-  "$(jq -r .scripts.start package.json)" > ../deploy/build/upstream-dockerfile-pin.txt
+  "$(jq -er .scripts.start package.json)" > "$DEPLOY_REPO/build/upstream-dockerfile-pin.txt"
 ```
+
+On macOS, `sha256sum` is `/sbin/sha256sum`. A missing `scripts.start` makes `jq -er` fail, so check the command's exit status before committing.
 
 ## Findings the gate lets through
 
