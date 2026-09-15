@@ -52,9 +52,12 @@ på formen `dev-NN`, `fag-NN` eller `pers-NN`, der `NN` er et tall, og personer
 som ikke er kartlagt, står som `[~ukjent-person]`, `[~person]` eller `@person`.
 
 - Si dette til personen første gang et alias dukker opp i et svar.
-- Nevner spørsmålet en navngitt person, så ta navnet ut av søket. Handler det
-  også om en sak, et tema eller et dokument, så søk på det uten navnet. Forklar
-  at kildene viser personer som alias, og at et navn derfor ikke kan slås opp.
+- Nevner spørsmålet en navngitt person, så ta navnet ut av søket, og forklar at
+  kildene viser personer som alias, slik at et navn ikke kan slås opp.
+  - Handler spørsmålet også om en sak, et tema eller et dokument, så søk på det
+    uten navnet.
+  - Handler spørsmålet bare om personen, så ikke søk. Spør hvilken sak eller
+    hvilket tema personen vil vite mer om.
 - Et treff som inneholder et fornavn, handler ikke nødvendigvis om personen det
   ble spurt om. Ikke knytt et treff til en navngitt person.
 - Ikke prøv å finne ut hvem et alias er, og ikke gjett.

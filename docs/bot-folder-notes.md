@@ -80,17 +80,22 @@ own loopback server, and the huginn address lives in `nais/app.yaml`:
 redeploy from `main`, for any reason, and then fails in one of two ways. Each
 failing turn still makes the decomposer's Haiku call on Vertex first.
 
-- **No `KNOWLEDGE_API_URL` in `nais/app.yaml`, or no running huginn:** muninn
-  falls back to `http://localhost:8321` (`src/config.ts`) when the variable is
-  missing; a `melosys-huginn-q2` that does not resolve or has no ready pod fails
-  the same way. Every sub-search fails within milliseconds, and the tool tells
-  the model that knowledge search is unavailable. The colleague gets an answer
-  with no sources on every corpus question.
-- **`KNOWLEDGE_API_URL=http://melosys-huginn-q2` and a running huginn, but no
-  `accessPolicy.outbound.rules` entry:** nais drops the packets, so each
-  sub-search waits out muninn's 30-second search timeout before the tool reports
-  knowledge search as unavailable. The colleague sees a stalled answer, then one
-  with no sources.
+- **No `KNOWLEDGE_API_URL` in `nais/app.yaml`, or no `melosys-huginn-q2`
+  app:** muninn falls back to `http://localhost:8321` (`src/config.ts`) when the
+  variable is missing, where nothing listens; a hostname with no app behind it
+  does not resolve. Either way every sub-search fails within milliseconds
+  (measured locally against muninn's own client), and the tool tells the model
+  that knowledge search is unavailable. The colleague gets an answer with no
+  sources on every corpus question.
+- **`KNOWLEDGE_API_URL=http://melosys-huginn-q2`, but no
+  `accessPolicy.outbound.rules` entry:** nais drops the packets, so the
+  sub-searches wait out muninn's 30-second search timeout before the tool
+  reports knowledge search as unavailable. The colleague sees a stalled answer,
+  then one with no sources.
+- **The app exists but no pod is ready** (huginn still loading its models, or
+  failing its probe): not measured on nais. Whether the Service rejects the
+  connection at once or drops it for 30 seconds depends on the cluster's
+  dataplane.
 
 The change that adds the pod and those manifest lines merges together with this
 one.
