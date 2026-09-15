@@ -77,11 +77,20 @@ own loopback server, and the huginn address lives in `nais/app.yaml`:
 ```
 
 **Do not merge this entry without huginn.** It ships in the image on the next
-redeploy from `main`, for any reason. Without a `melosys-huginn-q2` pod,
-`KNOWLEDGE_API_URL=http://melosys-huginn-q2` and an
-`accessPolicy.outbound.rules` entry for it, the tool connection-refuses on every
-call, which the colleague sees as a stalled answer or one with no sources. The
-change that adds the pod and the manifest lines merges together with this one.
+redeploy from `main`, for any reason, and then fails in one of two ways. Each
+failing turn still makes the decomposer's Haiku call on Vertex first.
+
+- **No `KNOWLEDGE_API_URL` in `nais/app.yaml`:** muninn falls back to
+  `http://localhost:8321` (`src/config.ts`), every sub-search is refused at
+  once, and the tool tells the model that knowledge search is unavailable. The
+  colleague gets an answer with no sources on every corpus question.
+- **`KNOWLEDGE_API_URL=http://melosys-huginn-q2` but no
+  `accessPolicy.outbound.rules` entry, or no pod:** nais drops the packets, so
+  each sub-search waits out muninn's 30-second search timeout before it fails.
+  The colleague sees a stalled answer.
+
+The change that adds the pod and those manifest lines merges together with this
+one.
 
 Three details are not visible from the file:
 
@@ -96,12 +105,13 @@ Three details are not visible from the file:
   default scope; huginn answers `404` for a collection it does not serve.
 - **The persona carries what the nudge would have said.** `CLAUDE.md` tells
   the model to use `research_knowledge` for every corpus question, simple ones
-  included, and that people appear as aliases, because the index is
-  pseudonymised and a search on a real name finds nothing.
+  included, and that people appear as aliases. The index is pseudonymised and
+  this pod has no alias map, so a real name cannot be looked up; the persona
+  tells the model not to search on one.
 
 The Jira composer's `Full` depth stays unreachable (it requires the `code` and
-`yggdrasil` MCP servers). Its pre-flight fails cleanly, but the message reads
-"the server is down" rather than "not in this instance".
+`yggdrasil` MCP servers). Its pre-flight refuses cleanly and says the code tools
+are not available in this installation.
 
 ## 5. `model` is pinned; `baseUrl` is the one the workflow writes
 
