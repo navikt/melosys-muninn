@@ -80,14 +80,17 @@ own loopback server, and the huginn address lives in `nais/app.yaml`:
 redeploy from `main`, for any reason, and then fails in one of two ways. Each
 failing turn still makes the decomposer's Haiku call on Vertex first.
 
-- **No `KNOWLEDGE_API_URL` in `nais/app.yaml`:** muninn falls back to
-  `http://localhost:8321` (`src/config.ts`), every sub-search is refused at
-  once, and the tool tells the model that knowledge search is unavailable. The
-  colleague gets an answer with no sources on every corpus question.
-- **`KNOWLEDGE_API_URL=http://melosys-huginn-q2` but no
-  `accessPolicy.outbound.rules` entry, or no pod:** nais drops the packets, so
-  each sub-search waits out muninn's 30-second search timeout before it fails.
-  The colleague sees a stalled answer.
+- **No `KNOWLEDGE_API_URL` in `nais/app.yaml`, or no running huginn:** muninn
+  falls back to `http://localhost:8321` (`src/config.ts`) when the variable is
+  missing; a `melosys-huginn-q2` that does not resolve or has no ready pod fails
+  the same way. Every sub-search fails within milliseconds, and the tool tells
+  the model that knowledge search is unavailable. The colleague gets an answer
+  with no sources on every corpus question.
+- **`KNOWLEDGE_API_URL=http://melosys-huginn-q2` and a running huginn, but no
+  `accessPolicy.outbound.rules` entry:** nais drops the packets, so each
+  sub-search waits out muninn's 30-second search timeout before the tool reports
+  knowledge search as unavailable. The colleague sees a stalled answer, then one
+  with no sources.
 
 The change that adds the pod and those manifest lines merges together with this
 one.
