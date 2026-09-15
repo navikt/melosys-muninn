@@ -77,7 +77,7 @@ own loopback server, and the huginn address lives in `nais/app.yaml`:
 ```
 
 **Do not merge this entry without huginn.** It ships in the image on the next
-redeploy from `main`, for any reason, and then fails in one of two ways. Each
+redeploy from `main`, for any reason, and then fails in one of the ways below. Each
 failing turn still makes the decomposer's Haiku call on Vertex first.
 
 - **No `KNOWLEDGE_API_URL` in `nais/app.yaml`, or no `melosys-huginn-q2`
@@ -96,6 +96,14 @@ failing turn still makes the decomposer's Haiku call on Vertex first.
   failing its probe): not measured on nais. Whether the Service rejects the
   connection at once or drops it for 30 seconds depends on the cluster's
   dataplane.
+- **The pod answers, but with an error:** for example huginn skipped one of the
+  three collections at load and the readiness probe is not huginn's `/ready`
+  (which answers `503` until every requested collection is served, so with it
+  this case becomes the previous one). huginn answers `404` for the whole request when any
+  requested collection is not served, and every sub-search sends all three, so
+  every sub-search fails at once and the tool reports knowledge search as
+  unavailable although huginn is up. A `503` looks the same. Check the
+  collections on huginn's `/ready` before the network.
 
 The change that adds the pod and those manifest lines merges together with this
 one.
