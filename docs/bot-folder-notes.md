@@ -52,7 +52,7 @@ call fail at the network rather than reach an unapproved provider.
 
 That argument was sound and is now the weaker one, because **it rests on a
 negative that a later config change breaks quietly**: the day huginn lands on
-nais and `.mcp.json` gains the `research` entry, the decomposer starts calling
+nais and `.mcp.json` gains its entry (§4), the decomposer starts calling
 Haiku on every lookup and the `anthropic` pin becomes a hard failure in front of
 a colleague. Correct-by-construction beats fails-closed-by-absence here.
 
@@ -64,36 +64,70 @@ Unlike the chat connector, this backend derives nothing from `baseUrl`:
 muninn's own names, with the SDK's names left unset so the `claude-sdk` path
 stays off.
 
-## 4. `.mcp.json` has no servers, and that is the design
+## 4. `.mcp.json` has one entry, keyed `knowledge`, and it needs huginn on nais
 
-muninn's `research_knowledge` is a **proxy**: the in-process MCP server queries
-huginn over HTTP at the bot's `knowledgeApiUrl`. huginn is not on nais in v1, so
-shipping the tool would give the model something that connection-refuses on
-every call — which the colleague sees as a stalled answer or a confident one
-with no sources. Better to have no tool than a broken one.
-
-The bot's persona (`CLAUDE.md`) must therefore SAY it has no source lookup in
-this deployment. A model that believes it can search and cannot is the failure
-mode this whole file is arranged against.
-
-Two consequences worth knowing:
-
-- The Jira composer's `Full` depth is unreachable (it requires the `code` and
-  `yggdrasil` MCP servers). Its pre-flight fails cleanly, but the message reads
-  "the server is down" rather than "not in this instance".
-- With one fewer retrieval path there is no double-bookkeeping between muninn's
-  own `research_knowledge` and huginn's `search_knowledge` — the thing
-  `src/research/huginn-hits.ts` exists to untangle. That is a small improvement,
-  not a reason to keep huginn away.
-
-When huginn lands on nais, this file becomes one entry:
+muninn's `research_knowledge` is a **proxy**: the in-process MCP server on
+`127.0.0.1:9190` queries huginn over HTTP at `KNOWLEDGE_API_URL`, a pod-wide
+env variable, not a value in this folder. The entry therefore points at muninn's
+own loopback server, and the huginn address lives in `nais/app.yaml`:
 
 ```json
-{ "mcpServers": { "research": { "type": "http", "url": "http://127.0.0.1:9190/mcp/melosys" } } }
+{ "mcpServers": { "knowledge": { "type": "http", "url": "http://127.0.0.1:9190/mcp/melosys",
+  "env": { "KNOWLEDGE_COLLECTIONS": "nav-wiki,melosys-confluence-v3,jira-issues" } } } }
 ```
 
-…plus a `knowledgeApiUrl` pointing at a huginn the pod can actually reach, and
-an `accessPolicy.outbound.rules` entry for it.
+**Do not merge this entry without huginn.** It ships in the image on the next
+redeploy from `main`, for any reason, and then fails in one of the ways below. Each
+failing turn still makes the decomposer's Haiku call on Vertex first.
+
+- **No `KNOWLEDGE_API_URL` in `nais/app.yaml`, or no `melosys-huginn-q2`
+  app:** muninn falls back to `http://localhost:8321` (`src/config.ts`) when the
+  variable is missing, where nothing listens; a hostname with no app behind it
+  does not resolve. Either way every sub-search fails within milliseconds
+  (measured locally against muninn's own client), and the tool tells the model
+  that knowledge search is unavailable. The colleague gets an answer with no
+  sources on every corpus question.
+- **`KNOWLEDGE_API_URL=http://melosys-huginn-q2`, but no
+  `accessPolicy.outbound.rules` entry:** nais drops the packets, so the
+  sub-searches wait out muninn's 30-second search timeout before the tool
+  reports knowledge search as unavailable. The colleague sees a stalled answer,
+  then one with no sources.
+- **The app exists but no pod is ready** (huginn still loading its models, or
+  failing its probe): not measured on nais. Whether the Service rejects the
+  connection at once or drops it for 30 seconds depends on the cluster's
+  dataplane.
+- **The pod answers, but with an error:** for example huginn skipped one of the
+  three collections at load and the readiness probe is not huginn's `/ready`
+  (which answers `503` until every requested collection is served, so with it
+  this case becomes the previous one). huginn answers `404` for the whole request when any
+  requested collection is not served, and every sub-search sends all three, so
+  every sub-search fails at once and the tool reports knowledge search as
+  unavailable although huginn is up. A `503` looks the same. Check the
+  collections on huginn's `/ready` before the network.
+
+The change that adds the pod and those manifest lines merges together with this
+one.
+
+Three details are not visible from the file:
+
+- **The key is `knowledge`, not `research`.** muninn appends a system-prompt
+  nudge when, and only when, a bot has an entry keyed exactly `research`
+  (`hasResearchKnowledge` in `src/bots/config.ts`). The nudge tells the model
+  to use `search_knowledge` for simple lookups, and that tool comes from
+  huginn's stdio adapter, which this pod cannot run. The key gates nothing
+  else: the tool loads from any entry.
+- **`KNOWLEDGE_COLLECTIONS` names exactly the collections the huginn image
+  bakes.** muninn reads it off any entry, whatever its type, as the tool's
+  default scope; huginn answers `404` for a collection it does not serve.
+- **The persona carries what the nudge would have said.** `CLAUDE.md` tells
+  the model to use `research_knowledge` for every corpus question, simple ones
+  included, and that people appear as aliases. The index is pseudonymised and
+  this pod has no alias map, so a real name cannot be looked up; the persona
+  tells the model not to search on one.
+
+The Jira composer's `Full` depth stays unreachable (it requires the `code` and
+`yggdrasil` MCP servers). Its pre-flight refuses cleanly and says the code tools
+are not available in this installation.
 
 ## 5. `model` is pinned; `baseUrl` is the one the workflow writes
 

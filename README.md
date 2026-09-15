@@ -37,7 +37,7 @@ to prevent.
 |---|---|
 | `nais/app.yaml` | The Application manifest. Templated with `{{ }}`; every comment in it explains a constraint that is easy to "simplify" into an outage. |
 | `nais/vars-q2.json` | The values. Ships full of `REPLACE_ME_` — see `docs/PREREQUISITES.md`. |
-| `bots/melosys/` | The bot: persona, `config.json`, an empty `.mcp.json`. Copied into `bots/` in the build context. |
+| `bots/melosys/` | The bot: persona, `config.json`, and a `.mcp.json` with one `knowledge` entry for muninn's in-process `research_knowledge` server. Copied into `bots/` in the build context. |
 | `.github/workflows/deploy.yml` | Check out muninn at a pinned ref → resolve it to a SHA → assign the Vertex base URL → overlay → build and push → pull the digest → assert → scan → deploy. |
 | `build/Dockerfile.nais` + `build/nais-entrypoint.ts` | The deployed image: Docker Hardened Images Bun, no shell, and a shell-free entrypoint. See `docs/runtime-image.md`. |
 | `build/upstream-dockerfile-pin.txt` | The sha256 of upstream's whole `Dockerfile` and `scripts/docker-entrypoint.sh`, and its `scripts.start`, as last mirrored. The workflow stops when any of them changes. |
