@@ -476,7 +476,8 @@ export function vurderFil(abs: string, rel: string, tillatIdent: boolean, nr?: n
   const grense = `filen er større enn ${MAKS_BYTES} byte og ville blitt hoppet over av speilet`;
   let fd: number;
   try {
-    fd = openSync(abs, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    // O_NONBLOCK: en FIFO blokkerer ellers åpningen til noen skriver til den.
+    fd = openSync(abs, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
   } catch (e) {
     const kode = (e as NodeJS.ErrnoException).code;
     if (kode === "ENOENT") v.avslag.push("filen finnes ikke");
