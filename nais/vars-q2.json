@@ -19,5 +19,10 @@
   "vertex_region": "europe-north1",
   "db_name": "muninn-db-q2",
   "_comment_db": "There is deliberately no `db_instance` key. The instance name is left unset in app.yaml so it defaults to the APP name — melosys-muninn-q2, which already carries the environment — matching skattehendelser-q2 and both faktureringskomponenten apps. `db_name` carries the -q2 suffix for the same reason: a prod deployment must not want a name this one already holds.",
-  "db_tier": "db-custom-1-3840"
+  "db_tier": "db-custom-1-3840",
+
+  "_comment_felles_wiki": "The private GCS bucket behind the felles-wiki prototype. Bucket names are GLOBALLY unique across all of Google, so it carries the environment like every other name here; checked free with `gcloud storage buckets describe` (404) on 2026-09-29, before nais created it. Used twice in app.yaml (gcp.buckets and WIKI_BUCKET_MIRRORS), and scripts/publiser-felles-wiki.ts defaults to the same name. The bucket holds page content; this repo never does. See docs/PREREQUISITES.md, \"Felles-wiki (prototype)\".",
+  "felles_wiki_bucket": "melosys-felles-wiki-q2",
+  "_comment_felles_wiki_project_number": "The project NUMBER of gcp_project (teammelosys-dev-df53), read with `gcloud projects describe`. Not secret. Feeds WIKI_BUCKET_MIRROR_PROJECT_NUMBER: the mirror refuses a bucket owned by any other project, because the bucket name above is public and bucket names are global. A string, digits only; deploy.yml checks the shape.",
+  "felles_wiki_project_number": "594181726752"
 }

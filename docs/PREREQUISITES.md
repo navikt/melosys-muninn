@@ -455,6 +455,153 @@ file half of this change (`admin_oids` gone, `envFrom` in).
 
 ---
 
+## Felles-wiki (prototype)
+
+Not a prerequisite for the pod: without it, chat works and the wiki is absent.
+
+**What it is.** A read-only wiki at
+`https://melosys-muninn-q2.intern.dev.nav.no/wiki?wiki=melosys-felles`. One
+curator copies pages into the private GCS bucket `felles_wiki_bucket`
+(`nais/vars-q2.json`); the pod mirrors the bucket into `/tmp/wikis/melosys-felles`
+every ~2 minutes and serves that copy to every team member who can reach the
+pod. `nais/app.yaml` declares the bucket, the four `WIKI_*` variables and the
+`storage.googleapis.com` egress entry, and explains each. The deployed muninn
+ref must contain muninn #615 (the read-only wiki slice under
+`MUNINN_PROFILE=nais`) and #616 (`WIKI_BUCKET_MIRRORS` and
+`WIKI_BUCKET_MIRROR_PROJECT_NUMBER`); an older ref ignores the variables.
+
+**This repo never holds page content.** It is public. Page names, page text and
+exports stay in the curator's local wiki folder and the bucket; the repo holds
+the bucket's name and the owning project's number, and nothing else.
+
+### Publishing
+
+`scripts/publiser-felles-wiki.ts` is the only automated check between a page and
+every team member, so it refuses rather than warns:
+
+- **Paths** follow the mirror's own rules: `.md`, `.mdx`, `.html` and a root
+  `.wiki-reader.json` only; no hidden segments, `..`, backslashes, control or
+  bidi characters, or segments over 211 bytes. It also refuses the wildcard
+  characters `[ ] * ?`, a name ending in `#<digits>` (gcloud reads it as an
+  object generation), symlinks, and a name that collides under lowercase + NFC
+  with a different live object anywhere in the bucket. Images and extracts (`.csv`,
+  `.json`, `.xlsx`, `.txt`) are never published; a page that shows local images
+  gets a warning, because the images will not appear.
+- **Size**: over 2 MB the mirror skips the object, so the script refuses it.
+- **Encoding**: a UTF-16 or UTF-32 file (a byte-order mark or NUL bytes) is
+  refused; the mirror and the reader expect UTF-8, and the checks below cannot
+  read it.
+- **Content and file name**: national identity numbers, D-numbers and H-numbers
+  (both check digits and a plausible date), organisation numbers (check digit in
+  a data-like context), e-mail addresses and NAVidents (an uppercase letter and
+  six digits). The text is normalised first — NFKC, HTML entities, zero-width
+  characters, non-breaking spaces, Hangul fillers — and digit groups split by
+  table cells, aligned columns, HTML cells (also one per line) or formatting
+  are joined before the check-digit test. `--tillat-ident` lets
+  e-mail addresses and NAVidents through; an identity number has no override.
+- **Culled pages**: `signal: none` in the frontmatter, or
+  `<meta name="wiki-signal" content="none">` in an `.html` page.
+
+Values are printed masked to their last two characters. A path with any hit,
+including one `--tillat-ident` lets through, is printed only in masked form, on
+every line: the upload line, the page URL, and gcloud's own error message. The upload sends the scanned bytes on stdin
+(`gcloud storage cp -`), so the file is read once and a local path is never
+handed to `gcloud`. Every approved file is tried even if one upload fails.
+Run it with `--dry-run` first; a dry run does not contact the bucket, so the
+collision check runs only on a real publish:
+
+```bash
+bun scripts/publiser-felles-wiki.ts --dry-run <wiki-root> <relPath>...
+bun scripts/publiser-felles-wiki.ts <wiki-root> <relPath>...
+```
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Everything was published (or would be, in a dry run). |
+| 1 | At least one file was refused by the checks, or a deletion was not confirmed. The others were published. |
+| 2 | Wrong usage or environment — no bucket, no `gcloud`, the bucket could not be listed or the listing had an unexpected shape. Nothing was done. |
+| 3 | At least one upload or deletion failed. The others went through; run again for the failed ones. |
+
+The scanner is a floor, not a review: it does not know a name from a word.
+
+### Retracting a page
+
+```bash
+bun scripts/publiser-felles-wiki.ts --fjern --dry-run <relPath>...
+bun scripts/publiser-felles-wiki.ts --fjern <relPath>...        # asks before deleting
+bun scripts/publiser-felles-wiki.ts --fjern --ja <relPath>...   # no question
+```
+
+`<relPath>` is the object name in the bucket, the same path the page was
+published under. The script prints what it will delete (`vil slette …`) before
+it asks, and `sletter …` only once you confirm. The bucket has no soft delete, so a deleted object is gone; the
+curator's local folder is the copy of record. The pod drops the page on its next
+poll, about 2 minutes later. If a page carried personal data, retract it first,
+then fix the local copy, then check the URL returns no page.
+
+### Operator steps, in order
+
+1. **Deploy a muninn ref with both #615 and #616.** Both are merged: dispatch
+   `deploy` with the full 40-character SHA of a muninn `main` commit at or
+   after `b23792b5` (the #616 merge). An older ref ignores the variables. The
+   deploy creates the bucket.
+2. **Check that the bucket is ours before publishing anything.** The name is
+   public in this repo, and bucket names are global:
+
+   ```bash
+   kubectl get storagebucket melosys-felles-wiki-q2 -n teammelosys   # READY True, UpToDate
+   gcloud storage buckets describe gs://melosys-felles-wiki-q2 --format='value(project_number)'
+   ```
+
+   The number must equal `felles_wiki_project_number` in `nais/vars-q2.json`.
+   The mirror checks the same thing and refuses a bucket owned by another
+   project, but nothing stops the curator's own upload going to it.
+3. **Prove write access with a real publish of a harmless page** (not a dry
+   run), then retract it:
+
+   ```bash
+   mkdir -p /tmp/felles-wiki-test && printf '# Test\n' > /tmp/felles-wiki-test/test-side.md
+   bun scripts/publiser-felles-wiki.ts /tmp/felles-wiki-test test-side.md
+   bun scripts/publiser-felles-wiki.ts --fjern --ja test-side.md
+   ```
+
+   A project owner or editor has write through the project's default legacy
+   bucket bindings. nais binds only the app's service account
+   (`storage.objectUser`, `storage.objectViewer`, `storage.bucketViewer`), and
+   the team's custom role has neither `storage.objects.*` nor `setIamPolicy`.
+   A team member without owner or editor gets write from an owner or editor,
+   on this bucket only:
+
+   ```bash
+   gcloud storage buckets add-iam-policy-binding gs://melosys-felles-wiki-q2 \
+     --member=user:<curator e-mail> --role=roles/storage.objectUser
+   ```
+
+   naiserator writes one IAMPolicyMember per binding it owns, not the bucket's
+   whole policy, so a manual binding is not reconciled away. Do not write the
+   curator's address into this repo.
+4. **Verify the mirror.** It logs through muninn's console sink; parse-time
+   refusals use the `WIKI_BUCKET_MIRRORS` spelling, so match both:
+
+   ```bash
+   kubectl logs -n teammelosys deploy/melosys-muninn-q2 | grep -iE "bucket[ _]mirror"
+   ```
+
+   Expect `Wiki bucket mirrors started: 1, every 120000 ms …`, then
+   `Wiki bucket mirror gs://… → /tmp/wikis/melosys-felles ready (…)` and, after a
+   publish, `… N downloaded, M deleted, L listed`. A `refused:` line names a
+   configuration mismatch. A `poll failed (Nx), local copy kept` right after
+   the first deploy is expected while the bucket or its IAM binding
+   propagates; a `403` that persists past a few polls is not, and means the SA
+   binding is missing. Then open the URL above.
+
+**Only a new pod starts empty.** `/tmp` is an `emptyDir`, so a new pod — every
+`Recreate` rollout, a reschedule — begins with no pages and the first poll
+after boot fills the wiki again. A container restart inside the same pod keeps
+the `emptyDir`, and the mirror adopts the files already there.
+
+---
+
 ## Not prerequisites, but decided
 
 - **v1 stops at dev-gcp.** Prod carries a personopplysninger decision that is not

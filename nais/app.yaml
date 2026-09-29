@@ -111,6 +111,33 @@ spec:
         flags:
           - name: timezone
             value: "Europe/Oslo"
+    buckets:
+      # The felles wiki (prototype). ONE curator uploads pages here; the pod
+      # mirrors the bucket into /tmp and serves it read-only (WIKI_BUCKET_MIRRORS
+      # below). This repo is public and never holds page content — only the
+      # bucket's name. See docs/PREREQUISITES.md, "Felles-wiki (prototype)".
+      #
+      # What naiserator makes of this entry, read from its source
+      # (pkg/resourcecreator/google/storagebucket) because the docs do not say:
+      # uniform bucket-level access ALWAYS on (there is no field for it, so none
+      # is written here), soft delete OFF (a deleted object is gone — the
+      # curator's local folder is the copy of record), and three roles for the
+      # APP's service account on this bucket only: storage.objectUser,
+      # storage.objectViewer and storage.bucketViewer. The pod only ever reads;
+      # objectUser's write half is nais's choice and this manifest cannot
+      # narrow it.
+      #
+      # The curator's own write access is NOT granted here — nais binds only the
+      # app's service account. It is an operator step, proved with a real
+      # publish of a harmless page; see the doc section above, "Operator steps".
+      - name: {{ felles_wiki_bucket }}
+        # false: deleting the Application must not delete the wiki. nais then
+        # abandons the bucket instead (a deletion-policy annotation).
+        cascadingDelete: false
+        publicAccessPrevention: true
+        # No lifecycleCondition and no retentionPeriodDays, deliberately: a
+        # lifecycle rule here is a DELETE rule, and the pages stay until the
+        # curator removes them.
     permissions:
       # Vertex AI. The pod authenticates to it with its own workload-identity
       # service account — there is no model API key anywhere in this manifest,
@@ -140,6 +167,17 @@ spec:
         # from (metadata.google.internal). It is node-local and outside
         # accessPolicy. See docs/PREREQUISITES.md §8.
         - host: {{ vertex_host }}
+        # The GCS JSON API the felles-wiki mirror polls. Measured from the pod
+        # on 2026-09-29, BEFORE this entry existed: a list call to
+        # storage.googleapis.com got a 403 from Google itself (the SA lacks
+        # project-level list), so the host was already reachable. The reason
+        # is nais's default egress to private.googleapis.com (Private Google
+        # Access), which carries the Google APIs: doc.nais.io/workloads/
+        # reference/access-policies/, "Default allowed external hosts" lists
+        # private.googleapis.com:443 for every workload. This entry is therefore not
+        # what opens the path today; it records the intent, so the dependency
+        # is visible here and survives a change to that default.
+        - host: storage.googleapis.com
 
   resources:
     limits:
@@ -265,3 +303,40 @@ spec:
       value: {{ gcp_project }}
     - name: VERTEX_REGION
       value: {{ vertex_region }}
+
+    # --- the felles wiki (prototype) -----------------------------------------
+    # A read-only wiki at /wiki?wiki=melosys-felles, mirrored from the bucket
+    # declared under gcp.buckets. Needs a muninn ref carrying both the nais
+    # read-only wiki slice (#615) and the bucket mirror (#616); an older ref
+    # ignores these four variables and the wiki does not appear.
+    #
+    # The root is under /tmp because /tmp is the pod's only writable path: nais
+    # runs the container with readOnlyRootFilesystem and mounts /tmp as an
+    # emptyDir. muninn enforces the same from its side — a mirror root outside
+    # os.tmpdir() is refused. The price of an emptyDir: a NEW pod (every
+    # Recreate rollout, a reschedule) starts EMPTY, and the wiki fills on the
+    # mirror's first poll, seconds after boot. A container restart inside the
+    # same pod keeps the emptyDir, and the mirror adopts the files already
+    # there. The poll interval is muninn's default,
+    # WIKI_BUCKET_MIRROR_INTERVAL_MS=120000.
+    #
+    # The one path is written three times, and all three must match: the
+    # mirror refuses a root that is not also in WIKI_READONLY_ROOTS (it deletes
+    # files, so it runs only where the wiki is read-only), and WIKI_EXTRA is
+    # what makes the root browsable under the name `melosys-felles`.
+    # Credentials: the app's workload-identity SA via the metadata server, the
+    # same route Vertex uses — no key.
+    - name: WIKI_BUCKET_MIRRORS
+      value: "gs://{{ felles_wiki_bucket }}=/tmp/wikis/melosys-felles"
+    - name: WIKI_EXTRA
+      value: "melosys-felles=/tmp/wikis/melosys-felles"
+    - name: WIKI_READONLY_ROOTS
+      value: "/tmp/wikis/melosys-felles"
+    # The project NUMBER that must own the bucket. The mirror reads the
+    # bucket's owning project before it mirrors anything, and refuses a bucket
+    # owned by another project. The bucket name is public in this repo and
+    # bucket names are global, so without this check anyone who created the
+    # name first (or after an accidental delete) would decide what the pod
+    # shows. Not secret: it is the number of gcp_project.
+    - name: WIKI_BUCKET_MIRROR_PROJECT_NUMBER
+      value: "{{ felles_wiki_project_number }}"
