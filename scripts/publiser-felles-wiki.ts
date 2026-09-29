@@ -43,7 +43,7 @@
  * `felles_wiki_bucket` i nais/vars-q2.json. Ingen avhengigheter utover Bun og
  * `gcloud`.
  */
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
 export const SIDE_ENDELSER = new Set([".md", ".mdx", ".html"]);
@@ -471,27 +471,41 @@ export function vurderFil(abs: string, rel: string, tillatIdent: boolean, nr?: n
     if (f.ident && tillatIdent) v.advarsler.push(`filnavnet har ${f.type} ${f.maskert} (tillatt med --tillat-ident)`);
     else v.avslag.push(`filnavnet har ${f.type} ${f.maskert}`);
   }
-  let st;
-  try {
-    st = lstatSync(abs);
-  } catch {
-    v.avslag.push("filen finnes ikke");
-    return v;
-  }
-  if (st.isSymbolicLink()) {
-    v.avslag.push("filen er en symlenke — publiser bare vanlige filer");
-    return v;
-  }
-  if (!st.isFile()) {
-    v.avslag.push("ikke en vanlig fil");
-    return v;
-  }
+  // Én åpning, og alle sjekker på fildeskriptoren: en sti som sjekkes og så
+  // leses på nytt, kan byttes ut (for eksempel mot en symlenke) mellom de to.
   const grense = `filen er større enn ${MAKS_BYTES} byte og ville blitt hoppet over av speilet`;
-  if (st.size > MAKS_BYTES) {
-    v.avslag.push(grense);
+  let fd: number;
+  try {
+    fd = openSync(abs, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch (e) {
+    const kode = (e as NodeJS.ErrnoException).code;
+    if (kode === "ENOENT") v.avslag.push("filen finnes ikke");
+    else if (kode === "ELOOP") v.avslag.push("filen er en symlenke — publiser bare vanlige filer");
+    else v.avslag.push(`filen kan ikke leses (${kode ?? "ukjent feil"})`);
     return v;
   }
-  const bytes = readFileSync(abs);
+  let bytes: Buffer;
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) {
+      v.avslag.push("ikke en vanlig fil");
+      return v;
+    }
+    if (st.size > MAKS_BYTES) {
+      v.avslag.push(grense);
+      return v;
+    }
+    // Les én byte over grensen, så en fil som vokser etter fstat også avvises.
+    const buf = Buffer.alloc(MAKS_BYTES + 1);
+    let lest = 0;
+    for (let n; lest < buf.length && (n = readSync(fd, buf, lest, buf.length - lest, lest)) > 0; ) lest += n;
+    bytes = buf.subarray(0, lest);
+  } catch (e) {
+    v.avslag.push(`filen kan ikke leses (${(e as NodeJS.ErrnoException).code ?? "ukjent feil"})`);
+    return v;
+  } finally {
+    closeSync(fd);
+  }
   if (bytes.length > MAKS_BYTES) {
     v.avslag.push(grense);
     return v;
