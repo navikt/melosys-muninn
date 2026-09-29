@@ -455,6 +455,76 @@ file half of this change (`admin_oids` gone, `envFrom` in).
 
 ---
 
+## Felles-wiki (prototype)
+
+Not a prerequisite for the pod: without it, chat works and the wiki is absent.
+
+**What it is.** A read-only wiki at
+`https://melosys-muninn-q2.intern.dev.nav.no/wiki?wiki=melosys-felles`. One
+curator copies pages into the private GCS bucket `felles_wiki_bucket`
+(`nais/vars-q2.json`); the pod mirrors the bucket into `/tmp/wikis/melosys-felles`
+every ~2 minutes and serves that copy. `nais/app.yaml` declares the bucket, the
+three `WIKI_*` variables and the `storage.googleapis.com` egress entry, and
+explains each. The deployed muninn ref must contain muninn #615 (the read-only
+wiki slice under `MUNINN_PROFILE=nais`) and #616 (`WIKI_BUCKET_MIRRORS`); an
+older ref ignores the variables.
+
+**This repo never holds page content.** It is public. Page names, page text and
+exports stay in the curator's local wiki folder and the bucket; the repo holds
+the bucket's name and nothing else.
+
+**Publishing** is `scripts/publiser-felles-wiki.ts`. It refuses anything but
+pages, images and a root `.wiki-reader.json`, refuses extracts (`.csv`,
+`.json`, `.xlsx`, `.txt`), refuses a page with `signal: none`, and refuses on
+any national identity number, D-number or organisation number it finds, and on
+e-mail addresses and NAVident-shaped codes unless `--tillat-ident` is passed.
+Run it with `--dry-run` first:
+
+```bash
+bun scripts/publiser-felles-wiki.ts --dry-run <wiki-root> <relPath>...
+```
+
+The scanner is a floor, not a review: it cannot read images, and it does not
+know a name from a word.
+
+**Curator write access — an operator step.** nais binds only the app's service
+account to the bucket (`storage.objectUser`, `storage.objectViewer`,
+`storage.bucketViewer`). Whether a team member can write depends on the team
+project's own IAM. After the first deploy has created the bucket, check first:
+
+```bash
+echo test > /tmp/felles-wiki-test.md
+gcloud storage cp /tmp/felles-wiki-test.md gs://melosys-felles-wiki-q2/felles-wiki-test.md
+gcloud storage rm gs://melosys-felles-wiki-q2/felles-wiki-test.md
+```
+
+On a `403`, grant the curator's own account write on this bucket only:
+
+```bash
+gcloud storage buckets add-iam-policy-binding gs://melosys-felles-wiki-q2 \
+  --member=user:<curator e-mail> --role=roles/storage.objectAdmin
+```
+
+Do not write the curator's address into this repo.
+
+**Verifying after a deploy.** The mirror logs through muninn's console sink:
+
+```bash
+kubectl logs -n teammelosys deploy/melosys-muninn-q2 | grep -i "bucket mirror"
+```
+
+Expect `Wiki bucket mirrors started: 1, every 120000 ms …`, then
+`Wiki bucket mirror gs://… → /tmp/wikis/melosys-felles ready (…)` and, after a
+publish, `… N downloaded, M deleted, L listed`. A `refused:` line names a
+configuration mismatch; `poll failed (Nx), local copy kept` names a GCS error,
+and a `403` there means the SA binding is missing. Then open the URL above.
+
+**A restart starts empty.** `/tmp` is an `emptyDir`, so every restart and
+every `Recreate` rollout begins with no pages; the first poll after boot fills
+the wiki again.
+
+---
+
 ## Not prerequisites, but decided
 
 - **v1 stops at dev-gcp.** Prod carries a personopplysninger decision that is not
