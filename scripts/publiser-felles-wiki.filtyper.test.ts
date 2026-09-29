@@ -1,6 +1,7 @@
-// Alle filtyper vurderFil kan møte, med forventet utfall. Tabellen er hele
-// tilstandsrommet for åpningen: vanlig fil, mappe, symlenke, FIFO, manglende,
-// uleselig og for stor fil.
+// Alle filtyper vurderFil kan møte, med forventet utfall: hver gren i åpningen
+// og fstat-sjekken (vanlig fil, mappe, symlenke, FIFO, manglende, uleselig og
+// for stor fil). Lesefasen dekkes ikke. NB: en åpning som blokkerer (FIFO uten
+// O_NONBLOCK) stopper hele prosessen, så tidsgrensen per test slår ikke til.
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,7 +10,7 @@ import { vurderFil } from "./publiser-felles-wiki.ts";
 
 const rot = mkdtempSync(path.join(tmpdir(), "filtyper-"));
 afterAll(() => {
-  try { chmodSync(path.join(rot, "ulesbar.md"), 0o644); } catch {}
+  try { chmodSync(path.join(rot, "ulesbar-Z990123.md"), 0o644); } catch {}
   rmSync(rot, { recursive: true, force: true });
 });
 writeFileSync(path.join(rot, "vanlig.md"), "# Side\n\nHei.\n");
@@ -35,7 +36,7 @@ describe("vurderFil over alle filtyper", () => {
       const v = vurderFil(path.join(rot, navn), navn, false);
       if (forventet) expect(v.avslag.join("\n")).toMatch(forventet);
       else expect(v.avslag).toEqual([]);
-    }, 3000);
+    });
   }
   test.skipIf(erRot)("uleselig fil gir avslag med feilkode, og navnet vises bare maskert", () => {
     const v = vurderFil(path.join(rot, "ulesbar-Z990123.md"), "ulesbar-Z990123.md", true, 1);
