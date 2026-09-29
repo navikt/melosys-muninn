@@ -135,7 +135,7 @@ describe("skannTekst", () => {
   // Z99xxxx er testidentområdet, ikke en ekte saksbehandler.
   test("NAVident-lignende kode gir ident-funn", () => {
     const funn = skannTekst("Saksbehandler Z990123 godkjente.");
-    expect(funn).toEqual([{ linje: 1, type: "NAVident", maskert: "*****23", ident: true }]);
+    expect(funn).toEqual([{ linje: 1, type: "NAVident", maskert: "*****23", ident: true, antall: 1 }]);
   });
   test("NAVident inne i et lengre ord gir ingen funn", () => {
     expect(skannTekst("abcZ990123 og Z9901234")).toEqual([]);
@@ -170,8 +170,8 @@ describe("harSignalNone", () => {
 });
 
 describe("sjekkSti", () => {
-  test("sider, bilder og roten sin .wiki-reader.json er tillatt", () => {
-    for (const s of ["a.md", "plans/b.mdx", "c.html", "img/d.png", "e.JPG", "f.svg", "g.webp", ".wiki-reader.json"]) {
+  test("sider og roten sin .wiki-reader.json er tillatt", () => {
+    for (const s of ["a.md", "plans/b.mdx", "c.html", "D.MD", ".wiki-reader.json"]) {
       expect(sjekkSti(s)).toBeNull();
     }
   });
@@ -190,7 +190,7 @@ describe("sjekkSti", () => {
   });
 });
 
-describe("refererteBilder", () => {
+describe("refererteBilder (brukes til en advarsel, bildene lastes ikke opp)", () => {
   test("relative bilder fra markdown og src, ikke URL-er eller absolutte stier", () => {
     const tekst = [
       "![diagram](bilder/flyt.png)",
@@ -236,7 +236,7 @@ describe("vurderFil", () => {
   });
   test("signal: none avvises", () => {
     const abs = skriv("stille.mdx", "---\nsignal: none\n---\nx\n");
-    expect(vurderFil(abs, "stille.mdx", false).avslag).toEqual(["frontmatter har `signal: none`"]);
+    expect(vurderFil(abs, "stille.mdx", false).avslag).toEqual(["siden er culled (`signal: none` eller wiki-signal=none)"]);
   });
   test("csv avvises uten å bli lest", () => {
     const abs = skriv("data.csv", `${FNR}\n`);

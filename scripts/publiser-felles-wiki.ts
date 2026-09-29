@@ -2,43 +2,72 @@
 /**
  * Publiserer sider fra en lokal wiki-mappe til felles-wiki-bøtta, som
  * melosys-muninn-q2 speiler og viser skrivebeskyttet på
- * /wiki?wiki=melosys-felles.
+ * /wiki?wiki=melosys-felles. Sletter objekter med `--fjern`.
  *
- *   bun scripts/publiser-felles-wiki.ts [--dry-run] [--tillat-ident] [--bucket <navn>] <wiki-rot> <relPath>...
+ *   bun scripts/publiser-felles-wiki.ts [--dry-run] [--tillat-ident] [--bucket <navn>] [--] <wiki-rot> <relPath>...
+ *   bun scripts/publiser-felles-wiki.ts --fjern [--ja] [--dry-run] [--bucket <navn>] [--] <relPath>...
  *
- * Hver fil sjekkes før opplasting, og en fil som feiler sjekken lastes ikke opp:
- *   - filtype: .md .mdx .html, bilder (.png .jpg .jpeg .gif .svg .webp) og
- *     `.wiki-reader.json` på rotnivå. Alt annet avvises, uttrekk (.csv .json
- *     .xlsx .txt) med egen melding. Reglene er de samme som speilet i muninn
- *     bruker, så en fil som slipper gjennom her, blir også vist i poden.
- *   - identifikatorer: fødselsnummer og D-nummer (kontrollsiffer + dato),
- *     organisasjonsnummer (kontrollsiffer, bare i datalignende kontekst — se
- *     `erDatakontekst`), e-postadresser og NAVident-lignende koder. De to siste
- *     avvises også, med mindre `--tillat-ident` er gitt. Funn skrives med fil,
- *     linje og type, og verdien er maskert til de to siste tegnene.
- *   - frontmatter med `signal: none` avvises.
+ * Skanneren er det eneste automatiske vernet mot personopplysninger: poden viser
+ * alt i bøtta til hele teamet. Hver fil sjekkes, og en fil som feiler, lastes
+ * ikke opp:
+ *   - sti: speilets egne regler — bare .md, .mdx, .html og `.wiki-reader.json`
+ *     på rotnivå; ingen skjulte segmenter, `..`, omvendt skråstrek, kontroll-
+ *     eller retningstegn, eller segmenter over 211 byte. I tillegg avvises
+ *     jokertegnene `[ ] * ?` (gcloud tolker dem som mønster), symlenker og
+ *     navn som kolliderer med et annet objekt under små bokstaver + NFC.
+ *     Bilder og uttrekk (.csv .json .xlsx .txt) publiseres aldri.
+ *   - størrelse: over 2 MB hopper speilet over objektet, så det avvises her.
+ *   - innhold og filnavn: fødselsnummer, D-nummer og H-nummer (kontrollsifre +
+ *     dato), organisasjonsnummer (kontrollsiffer i datalignende kontekst),
+ *     e-postadresser og NAVident. Teksten normaliseres først (NFKC, HTML-
+ *     entiteter, usynlige tegn), så også sifre skilt av tabellceller eller
+ *     formatering fanges. Bare e-post og NAVident kan slippes med
+ *     `--tillat-ident`; et fødselsnummer har ingen overstyring.
+ *   - culled: `signal: none` i frontmatter eller
+ *     `<meta name="wiki-signal" content="none">`.
+ * Verdier skrives maskert til de to siste tegnene, og en sti med funn skrives
+ * aldri ut.
  *
- * Bøtte: `--bucket`, ellers FELLES_WIKI_BUCKET, ellers `felles_wiki_bucket` i
- * nais/vars-q2.json. Ingen avhengigheter utover Bun og `gcloud`.
+ * Opplastingen sender de skannede byteene via stdin (`gcloud storage cp -`),
+ * så filen leses bare én gang.
+ *
+ * Exit-koder: 0 alt gikk bra; 1 minst én fil avvist av sjekken, eller
+ * slettingen ble ikke bekreftet; 2 feil bruk eller miljø (ingenting er gjort);
+ * 3 minst én opplasting eller sletting feilet (de andre er gjennomført).
+ *
+ * Bøtte: `--bucket`, ellers FELLES_WIKI_BUCKET (tom verdi teller ikke), ellers
+ * `felles_wiki_bucket` i nais/vars-q2.json. Ingen avhengigheter utover Bun og
+ * `gcloud`.
  */
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
 export const SIDE_ENDELSER = new Set([".md", ".mdx", ".html"]);
-export const BILDE_ENDELSER = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]);
-export const UTTREKK_ENDELSER = new Set([".csv", ".json", ".xlsx", ".txt"]);
+export const BILDE_ENDELSER = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".bmp", ".ico", ".tif", ".tiff"]);
+export const UTTREKK_ENDELSER = new Set([".csv", ".tsv", ".json", ".xlsx", ".xls", ".txt"]);
 export const LESER_KONFIG = ".wiki-reader.json";
-/** Speilet i muninn hopper over objekter over denne størrelsen. */
-export const MAKS_BYTES = 5 * 1024 * 1024;
+/** Speilet hopper over objekter større enn dette (MAX_OBJECT_BYTES i muninn). */
+export const MAKS_BYTES = 2 * 1024 * 1024;
+/** Speilets grense per stisegment: 255 minus temp-filens tillegg. */
+export const MAKS_SEGMENT_BYTES = 211;
 
-export type FunnType = "fødselsnummer" | "D-nummer" | "organisasjonsnummer" | "e-post" | "NAVident";
+export const EXIT_OK = 0;
+export const EXIT_AVVIST = 1;
+export const EXIT_BRUK = 2;
+export const EXIT_FEILET = 3;
+
+export type FnrType = "fødselsnummer" | "D-nummer" | "H-nummer";
+export type FunnType = FnrType | "organisasjonsnummer" | "e-post" | "NAVident";
 
 export interface Funn {
+  /** Første linje verdien står på. */
   linje: number;
   type: FunnType;
   maskert: string;
   /** e-post og NAVident — avvises bare uten --tillat-ident. */
   ident: boolean;
+  /** Hvor mange ganger samme verdi står i teksten. */
+  antall: number;
 }
 
 /** Alle tegn unntatt de to siste blir `*`. */
@@ -47,6 +76,44 @@ export function masker(verdi: string): string {
   if (v.length <= 2) return "*".repeat(v.length);
   return "*".repeat(v.length - 2) + v.slice(-2);
 }
+
+// ── Normalisering ────────────────────────────────────────────────
+
+const NAVNGITTE_ENTITETER: Record<string, string> = {
+  nbsp: " ", ensp: " ", emsp: " ", thinsp: " ", numsp: " ", puncsp: " ", hairsp: " ", emsp13: " ", emsp14: " ",
+  MediumSpace: " ", NonBreakingSpace: " ", shy: "", zwj: "", zwnj: "", ZeroWidthSpace: "", NoBreak: "", lrm: "", rlm: "",
+  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", period: ".", hyphen: "-", dash: "-", ndash: "-", mdash: "-",
+  minus: "-", commat: "@", colon: ":", sol: "/", verbar: "|", vert: "|", lowbar: "_", num: "#", ast: "*", midast: "*",
+};
+
+/** HTML-entiteter: numeriske (`;` valgfri) og navngitte (`;` påkrevd). */
+export function dekodEntiteter(s: string): string {
+  return s.replace(/&(?:#(\d{1,7});?|#[xX]([0-9a-fA-F]{1,6});?|([A-Za-z][A-Za-z0-9]{1,31});)/g, (hel, des, heks, navn) => {
+    if (navn !== undefined) return NAVNGITTE_ENTITETER[navn] ?? hel;
+    const kp = des !== undefined ? Number(des) : parseInt(heks, 16);
+    if (kp > 0x10ffff || (kp >= 0xd800 && kp <= 0xdfff)) return "";
+    if (kp < 0x20 || (kp >= 0x7f && kp <= 0x9f)) return " ";
+    return String.fromCodePoint(kp);
+  });
+}
+
+const USYNLIGE = /[\u00ad\u180e\u200b-\u200f\u2060-\u2064\ufeff]/g;
+const BINDESTREKER = /[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]/g;
+
+/**
+ * Én linje slik skanneren leser den: entiteter dekodet, NFKC (fullbredde-sifre
+ * blir ASCII), usynlige tegn og myk bindestrek fjernet, alle mellomrom til
+ * vanlig mellomrom og bindestrekvarianter til `-`.
+ */
+export function normaliserLinje(linje: string): string {
+  return dekodEntiteter(linje)
+    .normalize("NFKC")
+    .replace(USYNLIGE, "")
+    .replace(/[\p{Zs}\t]/gu, " ")
+    .replace(BINDESTREKER, "-");
+}
+
+// ── Kontrollsifre ────────────────────────────────────────────────
 
 function mod11(sifre: number[], vekter: number[]): number | null {
   const sum = vekter.reduce((acc, w, i) => acc + w * sifre[i]!, 0);
@@ -72,19 +139,23 @@ export function gyldigKontrollsiffer11(nr: string): boolean {
 const DAGER_I_MÅNED = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 /**
- * Fødselsnummer, D-nummer eller ingen av delene. D-nummer har 4 lagt til
- * første siffer (dag + 40). Datoen sjekkes mot månedslengde, med 29. februar
- * alltid tillatt — århundret følger av individnummeret, og en litt for vid
- * datosjekk avviser heller for mye enn for lite.
+ * Fødselsnummer, D-nummer (dag + 40), H-nummer (måned + 40) eller ingen av
+ * delene. H-nummer tildeles ekte personer og flagges; måned + 80 er syntetiske
+ * testpersoner og flagges ikke. 29. februar er alltid tillatt, fordi århundret
+ * ikke avledes — en litt for vid datosjekk avviser heller for mye.
  */
-export function klassifiser11(nr: string): "fødselsnummer" | "D-nummer" | null {
+export function klassifiser11(nr: string): FnrType | null {
   if (!gyldigKontrollsiffer11(nr)) return null;
   let dag = Number(nr.slice(0, 2));
-  const måned = Number(nr.slice(2, 4));
-  let type: "fødselsnummer" | "D-nummer" = "fødselsnummer";
+  let måned = Number(nr.slice(2, 4));
+  let type: FnrType = "fødselsnummer";
   if (dag > 40) {
     dag -= 40;
     type = "D-nummer";
+  }
+  if (måned > 40 && måned <= 52) {
+    måned -= 40;
+    if (type === "fødselsnummer") type = "H-nummer";
   }
   if (måned < 1 || måned > 12) return null;
   if (dag < 1 || dag > DAGER_I_MÅNED[måned - 1]!) return null;
@@ -101,71 +172,177 @@ export function gyldigOrgnr(nr: string): boolean {
   return k !== null && k === d[8];
 }
 
-const ORG_ORD = /org(anisasjons)?\.?\s*-?\s*(nr|nummer)|orgnr|virksomhetsnummer|\borgnum/i;
+const ORG_ORD = /org(anisasjons)?\.?\s*-?\s*(nr|nummer)|orgnr|\borgnum|(virksomhets|foretaks|enhets)\.?\s*-?\s*(nr|nummer)/i;
 
 /**
  * Når et gyldig 9-sifret tall regnes som et organisasjonsnummer. Et tall med
  * riktig kontrollsiffer alene er for vanlig (omtrent hvert ellevte tall), så
  * det kreves i tillegg ett av:
- *   - et ord som orgnr/organisasjonsnummer/virksomhetsnummer på samme linje,
- *   - en tabellrad (linjen starter med `|`),
- *   - en linje inne i en kodeblokk (``` eller ~~~),
- *   - en JSON-/nøkkel-verdi-lignende linje (`"felt": …` eller `felt: …`).
+ *   - et stikkord (orgnr, organisasjons-, virksomhets-, foretaks-, enhetsnummer),
+ *   - en tabellrad (`|` først) eller en HTML-celle (`<td>`/`<th>`),
+ *   - en linje inne i en kodeblokk,
+ *   - en JSON-, YAML- eller nøkkel-verdi-linje (`"felt": …`, `felt: …`, `- 9…`).
  */
 export function erDatakontekst(linje: string, iKodeblokk: boolean): boolean {
   if (iKodeblokk) return true;
   if (ORG_ORD.test(linje)) return true;
   const t = linje.trim();
   if (t.startsWith("|")) return true;
+  if (/<t[dh][\s>]/i.test(t)) return true;
   if (/["'][^"']*["']\s*:/.test(t)) return true;
-  if (/^[A-Za-z_][\w.-]*\s*[:=]\s*["']?\d/.test(t)) return true;
+  if (/^["']?[\p{L}_][\p{L}\p{N}_.-]*["']?\s*[:=]\s*["']?\d/u.test(t)) return true;
+  if (/^-\s+["']?\d/.test(t)) return true;
   return false;
 }
 
-const RE_11 = /(?<![\d])(\d{6})[ ]?(\d{5})(?![\d])/g;
-const RE_9 = /(?<![\d])(\d{3})[ ]?(\d{3})[ ]?(\d{3})(?![\d])/g;
-const RE_EPOST = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
-const RE_NAVIDENT = /(?<![A-Za-z0-9])[A-Za-z]\d{6}(?![A-Za-z0-9])/g;
+// ── Skanner ──────────────────────────────────────────────────────
 
-/** Skanner tekst linje for linje og returnerer alle funn. */
-export function skannTekst(tekst: string): Funn[] {
-  const funn: Funn[] = [];
-  let iKodeblokk = false;
-  const linjer = tekst.split(/\r?\n/);
-  for (let i = 0; i < linjer.length; i++) {
-    const linje = linjer[i]!;
-    const nr = i + 1;
-    const erGjerde = /^\s*(```|~~~)/.test(linje);
-    if (erGjerde) {
-      iKodeblokk = !iKodeblokk;
-      continue;
-    }
-    for (const m of linje.matchAll(RE_11)) {
-      const tall = m[1]! + m[2]!;
-      const type = klassifiser11(tall);
-      if (type) funn.push({ linje: nr, type, maskert: masker(tall), ident: false });
-    }
-    if (erDatakontekst(linje, iKodeblokk)) {
-      for (const m of linje.matchAll(RE_9)) {
-        const tall = m[1]! + m[2]! + m[3]!;
-        if (gyldigOrgnr(tall)) funn.push({ linje: nr, type: "organisasjonsnummer", maskert: masker(tall), ident: false });
+const RE_9 = /(?<!\d)(\d{3})[ .]?(\d{3})[ .]?(\d{3})(?!\d)/g;
+/** Stor bokstav + 6 sifre. En git-SHA er små bokstaver og treffer ikke. */
+const RE_NAVIDENT = /(?<![A-Za-z0-9])[A-Z]\d{6}(?![A-Za-z0-9])/g;
+/** Tegn mellom sifergrupper som projeksjonen slår sammen over. */
+const MAKS_MELLOMROM_PROJEKSJON = 5;
+
+/**
+ * 11-sifrede kandidater fra linjens sifre alene. Sifergrupper skilt av korte
+ * mellomrom uten bokstaver slås sammen, og hver sammenhengende rekke grupper
+ * som til sammen har nøyaktig 11 sifre, blir en kandidat. Det dekker
+ * `15038512345`, `150385 12345`, `150385.12345`, `15.03.85 12345`,
+ * `| 150385 | 12345 |`, `**150385**12345` og `<td>…</td><td>…</td>` (en
+ * HTML-tagg teller som ett tegn), men ikke `150385 og 12345`.
+ */
+export function sifferkandidater(linje: string): string[] {
+  const uten = linje.replace(/<[^<>]{0,200}>/g, "\u0000");
+  const ut: string[] = [];
+  let gruppe: string[] = [];
+  let forrigeSlutt = -1;
+  const tøm = () => {
+    for (let i = 0; i < gruppe.length; i++) {
+      let s = "";
+      for (let j = i; j < gruppe.length && s.length < 11; j++) {
+        s += gruppe[j];
+        if (s.length === 11) ut.push(s);
       }
     }
-    for (const m of linje.matchAll(RE_EPOST)) {
-      funn.push({ linje: nr, type: "e-post", maskert: masker(m[0]), ident: true });
+    gruppe = [];
+  };
+  for (const m of uten.matchAll(/\d+/g)) {
+    if (forrigeSlutt >= 0) {
+      const mellom = uten.slice(forrigeSlutt, m.index);
+      if (mellom.length > MAKS_MELLOMROM_PROJEKSJON || /\p{L}/u.test(mellom)) tøm();
     }
-    for (const m of linje.matchAll(RE_NAVIDENT)) {
-      funn.push({ linje: nr, type: "NAVident", maskert: masker(m[0]), ident: true });
-    }
+    gruppe.push(m[0]);
+    forrigeSlutt = m.index! + m[0].length;
   }
-  return funn;
+  tøm();
+  return ut;
 }
 
-/** `signal: none` i frontmatter (blokken mellom de to første `---`-linjene). */
-export function harSignalNone(tekst: string): boolean {
-  const m = /^﻿?---\r?\n([\s\S]*?)\r?\n---\s*(\r?\n|$)/.exec(tekst);
-  if (!m) return false;
-  return /^signal:\s*["']?none["']?\s*(#.*)?$/m.test(m[1]!);
+function erLokaltegn(c: number): boolean {
+  return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 46 || c === 95 || c === 37 || c === 43 || c === 45;
+}
+function erDomenetegn(c: number): boolean {
+  return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 46 || c === 45;
+}
+
+/**
+ * E-postadresser, i lineær tid: bare posisjoner med `@` undersøkes, og hvert
+ * tegn leses høyst et par ganger. Et regex av typen `[…]+@` prøver hver
+ * startposisjon på en lang linje uten `@` og er kvadratisk.
+ */
+export function finnEpost(linje: string): string[] {
+  const ut: string[] = [];
+  let fra = 0;
+  for (;;) {
+    const at = linje.indexOf("@", fra);
+    if (at < 0) return ut;
+    fra = at + 1;
+    let v = at;
+    while (v > 0 && erLokaltegn(linje.charCodeAt(v - 1))) v--;
+    if (v === at) continue;
+    let h = at + 1;
+    while (h < linje.length && erDomenetegn(linje.charCodeAt(h))) h++;
+    const domene = /^[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.exec(linje.slice(at + 1, h));
+    if (domene) ut.push(`${linje.slice(v, at)}@${domene[0]}`);
+  }
+}
+
+/** Kodeblokk-gjerde: tegn og lengde, så ``` inne i en ````-blokk ikke lukker den. */
+function gjerde(linje: string): { tegn: string; lengde: number; resten: string } | null {
+  const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(linje);
+  if (!m) return null;
+  return { tegn: m[1]![0]!, lengde: m[1]!.length, resten: m[2]! };
+}
+
+/** Skanner tekst linje for linje. Samme type + verdi rapporteres én gang, med antall. */
+export function skannTekst(tekst: string): Funn[] {
+  const funn = new Map<string, Funn>();
+  const legg = (linje: number, type: FunnType, verdi: string, ident: boolean) => {
+    const nøkkel = `${type}\u0000${verdi}`;
+    const f = funn.get(nøkkel);
+    if (f) f.antall++;
+    else funn.set(nøkkel, { linje, type, maskert: masker(verdi), ident, antall: 1 });
+  };
+  let åpen: { tegn: string; lengde: number } | null = null;
+  const linjer = tekst.split(/\r?\n/);
+  for (let i = 0; i < linjer.length; i++) {
+    const rå = linjer[i]!;
+    const nr = i + 1;
+    // Gjerdelinjen skannes selv også (info-strengen kan bære et nummer).
+    const varÅpen = åpen !== null;
+    const g = gjerde(rå);
+    if (g && !åpen && !(g.tegn === "`" && g.resten.includes("`"))) åpen = g;
+    else if (g && åpen && g.tegn === åpen.tegn && g.lengde >= åpen.lengde && g.resten.trim() === "") åpen = null;
+    const iKodeblokk = varÅpen && åpen !== null;
+    const linje = normaliserLinje(rå);
+    for (const tall of new Set(sifferkandidater(linje))) {
+      const type = klassifiser11(tall);
+      if (type) legg(nr, type, tall, false);
+    }
+    if (erDatakontekst(linje, iKodeblokk)) {
+      const ni = new Set<string>();
+      for (const m of linje.matchAll(RE_9)) ni.add(m[1]! + m[2]! + m[3]!);
+      for (const tall of ni) if (gyldigOrgnr(tall)) legg(nr, "organisasjonsnummer", tall, false);
+    }
+    for (const e of finnEpost(linje)) legg(nr, "e-post", e, true);
+    for (const m of linje.matchAll(RE_NAVIDENT)) legg(nr, "NAVident", m[0], true);
+  }
+  return [...funn.values()];
+}
+
+/**
+ * Siden er culled: `signal: none` i frontmatter (store/små bokstaver, blanke
+ * linjer foran tåles), eller — bare i en .html-side — `<meta name="wiki-signal"
+ * content="none">`, muninns HTML-form. En .md-side som omtaler meta-taggen i
+ * teksten, er ikke culled.
+ */
+export function harSignalNone(tekst: string, erHtml = false): boolean {
+  const t = tekst.replace(/^\ufeff/, "");
+  const fm = /^(?:[ \t]*\r?\n)*---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(t);
+  if (fm && /^[ \t]*signal[ \t]*:[ \t]*["']?none["']?[ \t]*(#.*)?$/im.test(fm[1]!)) return true;
+  if (!erHtml) return false;
+  for (const m of t.matchAll(/<meta\b[^<>]{0,1000}>/gi)) {
+    const tagg = m[0];
+    if (/\bname\s*=\s*["']?wiki-signal(?=["'\s/>])/i.test(tagg) && /\bcontent\s*=\s*["']?\s*none\s*(?=["'\s/>])/i.test(tagg)) return true;
+  }
+  return false;
+}
+
+// ── Stier ────────────────────────────────────────────────────────
+
+/** Speilets kontrolltegn (C0, DEL, C1, U+2028/9, bidi) + LRM/RLM/ALM. */
+const KONTROLLTEGN = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
+const JOKERTEGN = /[[\]*?]/;
+
+/** Stiregler som gjelder både opplasting og sletting. */
+function sjekkStiform(rel: string): string | null {
+  if (rel === "" || rel.startsWith("/") || rel.includes("\\")) return "ugyldig sti";
+  if (KONTROLLTEGN.test(rel)) return "stien har kontrolltegn eller retningstegn";
+  if (JOKERTEGN.test(rel)) return "stien har et jokertegn ([ ] * ?) som gcloud tolker som mønster";
+  const deler = rel.normalize("NFC").split("/");
+  if (deler.some((d) => d === "" || d === "." || d === "..")) return "stien peker ut av wiki-roten";
+  if (deler.some((d) => Buffer.byteLength(d) > MAKS_SEGMENT_BYTES)) return `et stisegment er lengre enn ${MAKS_SEGMENT_BYTES} byte`;
+  return null;
 }
 
 /**
@@ -173,24 +350,19 @@ export function harSignalNone(tekst: string): boolean {
  * `rel` er posix-relativ til wiki-roten.
  */
 export function sjekkSti(rel: string): string | null {
-  if (rel === "" || rel.startsWith("/") || rel.includes("\\")) return "ugyldig sti";
-  const deler = rel.split("/");
-  if (deler.some((d) => d === "" || d === "." || d === "..")) return "stien peker ut av wiki-roten";
-  if (rel === LESER_KONFIG) return null;
-  if (deler.some((d) => d.startsWith("."))) return "skjult fil eller mappe";
-  const ext = path.posix.extname(rel).toLowerCase();
+  const form = sjekkStiform(rel);
+  if (form) return form;
+  const nfc = rel.normalize("NFC");
+  if (nfc === LESER_KONFIG) return null;
+  if (nfc.split("/").some((d) => d.startsWith("."))) return "skjult fil eller mappe";
+  const ext = path.posix.extname(nfc).toLowerCase();
   if (UTTREKK_ENDELSER.has(ext)) return `filtypen ${ext} er et uttrekk og publiseres aldri`;
-  if (!SIDE_ENDELSER.has(ext) && !BILDE_ENDELSER.has(ext)) return `filtypen ${ext || "(ingen)"} er ikke tillatt`;
+  if (BILDE_ENDELSER.has(ext)) return `bilder (${ext}) publiseres ikke — speilet viser bare sider`;
+  if (!SIDE_ENDELSER.has(ext)) return `filtypen ${ext || "(ingen)"} er ikke tillatt`;
   return null;
 }
 
-/** Filer som skannes som tekst. SVG er tekst og kan bære navn og nummer. */
-export function erTekst(rel: string): boolean {
-  const ext = path.posix.extname(rel).toLowerCase();
-  return rel === LESER_KONFIG || SIDE_ENDELSER.has(ext) || ext === ".svg";
-}
-
-/** Relative bildestier en side refererer til (markdown, `<img src>`, `src=`). */
+/** Lokale bildestier en side viser (markdown, `<img src>`, `src=`). */
 export function refererteBilder(tekst: string): string[] {
   const ut = new Set<string>();
   const kandidater: string[] = [];
@@ -198,65 +370,109 @@ export function refererteBilder(tekst: string): string[] {
   for (const m of tekst.matchAll(/\bsrc\s*=\s*\{?\s*["']([^"']+)["']/g)) kandidater.push(m[1]!);
   for (const k of kandidater) {
     if (/^[a-z][a-z0-9+.-]*:/i.test(k) || k.startsWith("/") || k.startsWith("#")) continue;
-    let ren: string;
-    try {
-      ren = decodeURI(k.split(/[?#]/)[0]!);
-    } catch {
-      continue;
-    }
-    if (BILDE_ENDELSER.has(path.posix.extname(ren).toLowerCase())) ut.add(ren);
+    if (BILDE_ENDELSER.has(path.posix.extname(k.split(/[?#]/)[0]!).toLowerCase())) ut.add(k);
   }
   return [...ut];
 }
 
-export interface Vurdering {
-  rel: string;
-  avslag: string[];
-  advarsler: string[];
+/** Nøkkelen speilet sammenligner navn på: små bokstaver + NFC. */
+export function kollisjonsnøkkel(navn: string): string {
+  return navn.normalize("NFC").toLowerCase();
 }
 
-/** Vurderer én fil på disk. `abs` må ligge under roten. */
-export function vurderFil(abs: string, rel: string, tillatIdent: boolean): Vurdering {
-  const v: Vurdering = { rel, avslag: [], advarsler: [] };
+/** Stien slik den kan skrives ut: hel, eller skjult når den har et funn. */
+export function visningsnavn(rel: string, nr?: number): string {
+  const funn = skannTekst(rel);
+  if (funn.length === 0) return rel;
+  return `[skjult sti${nr !== undefined ? ` nr. ${nr}` : ""}: inneholder ${[...new Set(funn.map((f) => f.type))].join(", ")}]`;
+}
+
+export interface Vurdering {
+  rel: string;
+  /** Objektnavnet i bøtta: `rel` i NFC. */
+  objekt: string;
+  /** Det som skrives ut i stedet for stien. */
+  visning: string;
+  avslag: string[];
+  advarsler: string[];
+  /** Byteene som ble skannet, og som lastes opp. */
+  bytes?: Uint8Array;
+}
+
+/** Vurderer én fil på disk. `abs` må ligge under roten; symlenker avvises. */
+export function vurderFil(abs: string, rel: string, tillatIdent: boolean, nr?: number): Vurdering {
+  const visning = visningsnavn(rel, nr);
+  const v: Vurdering = { rel, objekt: rel.normalize("NFC"), visning, avslag: [], advarsler: [] };
   const sti = sjekkSti(rel);
   if (sti) {
     v.avslag.push(sti);
     return v;
   }
-  if (!existsSync(abs) || !statSync(abs).isFile()) {
+  for (const f of skannTekst(rel)) {
+    if (f.ident && tillatIdent) v.advarsler.push(`filnavnet har ${f.type} ${f.maskert} (tillatt med --tillat-ident)`);
+    else v.avslag.push(`filnavnet har ${f.type} ${f.maskert}`);
+  }
+  let st;
+  try {
+    st = lstatSync(abs);
+  } catch {
     v.avslag.push("filen finnes ikke");
     return v;
   }
-  const størrelse = statSync(abs).size;
-  if (størrelse > MAKS_BYTES) v.avslag.push(`filen er større enn ${MAKS_BYTES} byte og ville blitt hoppet over av speilet`);
-  if (!erTekst(rel)) {
-    v.advarsler.push("bilder skannes ikke for personopplysninger — se over bildet selv");
+  if (st.isSymbolicLink()) {
+    v.avslag.push("filen er en symlenke — publiser bare vanlige filer");
     return v;
   }
-  const tekst = readFileSync(abs, "utf8");
-  if (harSignalNone(tekst)) v.avslag.push("frontmatter har `signal: none`");
+  if (!st.isFile()) {
+    v.avslag.push("ikke en vanlig fil");
+    return v;
+  }
+  const grense = `filen er større enn ${MAKS_BYTES} byte og ville blitt hoppet over av speilet`;
+  if (st.size > MAKS_BYTES) {
+    v.avslag.push(grense);
+    return v;
+  }
+  const bytes = readFileSync(abs);
+  if (bytes.length > MAKS_BYTES) {
+    v.avslag.push(grense);
+    return v;
+  }
+  const tekst = new TextDecoder("utf-8").decode(bytes);
+  if (harSignalNone(tekst, path.posix.extname(rel).toLowerCase() === ".html")) v.avslag.push("siden er culled (`signal: none` eller wiki-signal=none)");
   for (const f of skannTekst(tekst)) {
-    const linje = `${rel}:${f.linje}: ${f.type} ${f.maskert}`;
+    const antall = f.antall > 1 ? ` (${f.antall} forekomster)` : "";
+    const linje = `${visning}:${f.linje}: ${f.type} ${f.maskert}${antall}`;
     if (f.ident && tillatIdent) v.advarsler.push(`${linje} (tillatt med --tillat-ident)`);
     else v.avslag.push(f.ident ? `${linje} (bruk --tillat-ident hvis dette er med vilje)` : linje);
   }
+  const bilder = SIDE_ENDELSER.has(path.posix.extname(rel).toLowerCase()) ? refererteBilder(tekst).length : 0;
+  if (bilder > 0) v.advarsler.push(`siden viser ${bilder} bilde(r); bilder publiseres ikke og vises ikke i felles-wikien`);
+  v.bytes = bytes;
   return v;
 }
+
+// ── Kommandolinje ────────────────────────────────────────────────
 
 interface Valg {
   dryRun: boolean;
   tillatIdent: boolean;
+  fjern: boolean;
+  ja: boolean;
   bucket?: string;
-  rot?: string;
-  stier: string[];
+  posisjonelle: string[];
 }
 
 function lesArgs(argv: string[]): Valg | string {
-  const v: Valg = { dryRun: false, tillatIdent: false, stier: [] };
+  const v: Valg = { dryRun: false, tillatIdent: false, fjern: false, ja: false, posisjonelle: [] };
+  let bareStier = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
-    if (a === "--dry-run") v.dryRun = true;
+    if (bareStier) v.posisjonelle.push(a);
+    else if (a === "--") bareStier = true;
+    else if (a === "--dry-run") v.dryRun = true;
     else if (a === "--tillat-ident") v.tillatIdent = true;
+    else if (a === "--fjern") v.fjern = true;
+    else if (a === "--ja") v.ja = true;
     else if (a === "--bucket") {
       const b = argv[++i];
       if (!b) return "--bucket mangler verdi";
@@ -264,14 +480,251 @@ function lesArgs(argv: string[]): Valg | string {
     } else if (a.startsWith("--bucket=")) v.bucket = a.slice("--bucket=".length);
     else if (a === "-h" || a === "--help") return "";
     else if (a.startsWith("-")) return `ukjent flagg: ${a}`;
-    else if (!v.rot) v.rot = a;
-    else v.stier.push(a);
+    else v.posisjonelle.push(a);
   }
-  if (!v.rot || v.stier.length === 0) return "mangler wiki-rot eller relPath";
+  if (v.fjern) {
+    if (v.posisjonelle.length === 0) return "--fjern mangler relPath";
+    if (v.tillatIdent) return "--tillat-ident gjelder ikke --fjern";
+  } else {
+    if (v.ja) return "--ja gjelder bare --fjern";
+    if (v.posisjonelle.length < 2) return "mangler wiki-rot eller relPath";
+  }
   return v;
 }
 
-const BRUK = "Bruk: bun scripts/publiser-felles-wiki.ts [--dry-run] [--tillat-ident] [--bucket <navn>] <wiki-rot> <relPath>...";
+const BRUK = [
+  "Bruk: bun scripts/publiser-felles-wiki.ts [--dry-run] [--tillat-ident] [--bucket <navn>] [--] <wiki-rot> <relPath>...",
+  "      bun scripts/publiser-felles-wiki.ts --fjern [--ja] [--dry-run] [--bucket <navn>] [--] <relPath>...",
+].join("\n");
+
+/** Samme form som vakten i deploy.yml: små bokstaver, sifre, bindestrek, 3–63 tegn. */
+export const BØTTENAVN = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+
+export interface GcloudSvar {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface Omgivelser {
+  env: Record<string, string | undefined>;
+  vars: Record<string, unknown>;
+  /** null når gcloud ikke finnes. */
+  gcloud: ((args: string[], stdin?: Uint8Array) => GcloudSvar) | null;
+  spør: (spørsmål: string) => string | null;
+  ut: (linje: string) => void;
+  feil: (linje: string) => void;
+}
+
+function innholdstype(objekt: string): string {
+  const ext = path.posix.extname(objekt).toLowerCase();
+  if (ext === ".html") return "text/html; charset=utf-8";
+  if (ext === ".json") return "application/json; charset=utf-8";
+  return "text/markdown; charset=utf-8";
+}
+
+/**
+ * Relativ posix-sti under roten, uten å løse opp symlenker, eller en grunn til
+ * avslag. En symlenke i et mappeledd under roten avvises her; en symlenke som
+ * selve filen avviser `vurderFil`.
+ */
+function relUnder(rot: string, oppgitt: string, s: string): { rel: string; abs: string } | string {
+  for (const base of [rot, oppgitt]) {
+    const abs = path.resolve(base, s);
+    const r = path.relative(base, abs);
+    if (r === "" || r.startsWith("..") || path.isAbsolute(r)) continue;
+    const deler = r.split(path.sep);
+    let cur = rot;
+    for (let i = 0; i < deler.length - 1; i++) {
+      cur = path.join(cur, deler[i]!);
+      try {
+        if (lstatSync(cur).isSymbolicLink()) return "stien går gjennom en symlenke";
+      } catch {
+        break;
+      }
+    }
+    return { rel: deler.join("/"), abs: path.join(rot, ...deler) };
+  }
+  return "stien ligger utenfor wiki-roten";
+}
+
+function velgBøtte(valg: Valg, o: Omgivelser): string | undefined {
+  const env = o.env.FELLES_WIKI_BUCKET?.trim();
+  return valg.bucket ?? (env || undefined) ?? (typeof o.vars.felles_wiki_bucket === "string" ? o.vars.felles_wiki_bucket : undefined);
+}
+
+/** Objektnavnene i bøtta, eller en feilmelding. */
+function listObjekter(bucket: string, o: Omgivelser): string[] | string {
+  const r = o.gcloud!(["storage", "objects", "list", `gs://${bucket}`, "--format=json(name)"]);
+  if (r.exitCode !== 0) return `gcloud storage objects list feilet (exit ${r.exitCode}): ${r.stderr.trim().split("\n").at(-1) ?? ""}`;
+  try {
+    const data = JSON.parse(r.stdout.trim() || "[]") as { name?: unknown }[];
+    return data.map((x) => x.name).filter((n): n is string => typeof n === "string");
+  } catch {
+    return "kunne ikke lese objektlisten fra gcloud";
+  }
+}
+
+function fjern(valg: Valg, bucket: string, o: Omgivelser): number {
+  const mål: { objekt: string; visning: string }[] = [];
+  let avvist = 0;
+  valg.posisjonelle.forEach((rel, i) => {
+    const visning = visningsnavn(rel, i + 1);
+    const grunn = sjekkStiform(rel);
+    if (grunn) {
+      o.ut(`AVVIST  ${visning}\n    avslag: ${grunn}`);
+      avvist++;
+    } else mål.push({ objekt: rel, visning });
+  });
+  if (avvist > 0) {
+    o.ut(`\n${avvist} sti(er) avvist — ingenting er slettet.`);
+    return EXIT_AVVIST;
+  }
+  for (const m of mål) o.ut(`${valg.dryRun ? "vil slette" : "sletter"} gs://${bucket}/${m.visning}`);
+  if (valg.dryRun) {
+    o.ut("\nTørrkjøring — ingenting er slettet.");
+    return EXIT_OK;
+  }
+  if (!o.gcloud) {
+    o.feil("Feil: finner ikke gcloud på PATH — ingenting er slettet");
+    return EXIT_BRUK;
+  }
+  if (!valg.ja) {
+    const svar = o.spør(`Slette ${mål.length} objekt(er) fra gs://${bucket}? [j/N]`);
+    if (!svar || !/^\s*(j|ja|y|yes)\s*$/i.test(svar)) {
+      o.ut("Ikke bekreftet — ingenting er slettet.");
+      return EXIT_AVVIST;
+    }
+  }
+  let feilet = 0;
+  for (const m of mål) {
+    const r = o.gcloud(["storage", "rm", `gs://${bucket}/${m.objekt}`]);
+    if (r.exitCode === 0) o.ut(`slettet gs://${bucket}/${m.visning}`);
+    else {
+      feilet++;
+      o.feil(`Feil: sletting av gs://${bucket}/${m.visning} feilet (exit ${r.exitCode})`);
+    }
+  }
+  o.ut(`\nOppsummering: ${mål.length - feilet} slettet, ${feilet} feilet. Poden fjerner sidene ved neste poll (~2 min).`);
+  return feilet > 0 ? EXIT_FEILET : EXIT_OK;
+}
+
+export function kjør(argv: string[], o: Omgivelser): number {
+  const valg = lesArgs(argv);
+  if (typeof valg === "string") {
+    if (valg) o.feil(`Feil: ${valg}`);
+    o.feil(BRUK);
+    return valg ? EXIT_BRUK : EXIT_OK;
+  }
+  const bucket = velgBøtte(valg, o);
+  if (!bucket || !BØTTENAVN.test(bucket)) {
+    o.feil(`Feil: ingen gyldig bøtte (fikk ${JSON.stringify(bucket ?? null)}). Bruk --bucket eller FELLES_WIKI_BUCKET.`);
+    return EXIT_BRUK;
+  }
+  if (valg.fjern) return fjern(valg, bucket, o);
+
+  const [rotArg, ...stier] = valg.posisjonelle;
+  const ingress = typeof o.vars.ingress_intern === "string" ? o.vars.ingress_intern : "https://melosys-muninn-q2.intern.dev.nav.no";
+  const oppgitt = path.resolve(rotArg!);
+  if (!existsSync(oppgitt) || !statSync(oppgitt).isDirectory()) {
+    o.feil("Feil: wiki-roten finnes ikke eller er ikke en mappe");
+    return EXIT_BRUK;
+  }
+  const rot = realpathSync(oppgitt);
+
+  const vurderinger: Vurdering[] = [];
+  const sett = new Set<string>();
+  stier.forEach((s, i) => {
+    const r = relUnder(rot, oppgitt, s);
+    if (typeof r === "string") {
+      vurderinger.push({ rel: s, objekt: s, visning: visningsnavn(s, i + 1), avslag: [r], advarsler: [] });
+      return;
+    }
+    if (sett.has(r.rel)) return;
+    sett.add(r.rel);
+    vurderinger.push(vurderFil(r.abs, r.rel, valg.tillatIdent, i + 1));
+  });
+
+  // To navn i samme kjøring som speilet ville slått sammen: avvis alle.
+  const perNøkkel = new Map<string, Set<string>>();
+  for (const v of vurderinger) {
+    const k = kollisjonsnøkkel(v.objekt);
+    perNøkkel.set(k, (perNøkkel.get(k) ?? new Set()).add(v.objekt));
+  }
+  for (const v of vurderinger) {
+    if ((perNøkkel.get(kollisjonsnøkkel(v.objekt))?.size ?? 0) > 1) v.avslag.push("kolliderer med en annen fil i samme kjøring under små bokstaver + NFC");
+  }
+
+  const utskriv = (v: Vurdering) => {
+    o.ut(`${v.avslag.length ? "AVVIST " : "OK     "} ${v.visning}`);
+    for (const a of v.avslag) o.ut(`    avslag: ${a}`);
+    for (const a of v.advarsler) o.ut(`    advarsel: ${a}`);
+  };
+
+  let godkjent = vurderinger.filter((v) => v.avslag.length === 0);
+  const lastetOpp: Vurdering[] = [];
+  const feilet: Vurdering[] = [];
+
+  if (godkjent.length > 0 && !valg.dryRun) {
+    if (!o.gcloud) {
+      vurderinger.forEach(utskriv);
+      o.feil("Feil: finner ikke gcloud på PATH — ingenting er lastet opp");
+      return EXIT_BRUK;
+    }
+    const eksisterende = listObjekter(bucket, o);
+    if (typeof eksisterende === "string") {
+      vurderinger.forEach(utskriv);
+      o.feil(`Feil: ${eksisterende} — uten objektlisten kan kollisjoner ikke sjekkes, så ingenting er lastet opp`);
+      return EXIT_BRUK;
+    }
+    const perEksNøkkel = new Map<string, string[]>();
+    for (const n of eksisterende) perEksNøkkel.set(kollisjonsnøkkel(n), [...(perEksNøkkel.get(kollisjonsnøkkel(n)) ?? []), n]);
+    for (const v of godkjent) {
+      const andre = (perEksNøkkel.get(kollisjonsnøkkel(v.objekt)) ?? []).filter((n) => n !== v.objekt);
+      if (andre.length > 0) {
+        v.avslag.push(
+          `kolliderer med eksisterende objekt ${andre.map((n) => visningsnavn(n)).join(", ")} under små bokstaver + NFC — ` +
+            "fjern det gamle først med --fjern",
+        );
+      }
+    }
+    godkjent = godkjent.filter((v) => v.avslag.length === 0);
+  }
+
+  vurderinger.forEach(utskriv);
+
+  if (valg.dryRun) {
+    for (const v of godkjent) o.ut(`vil laste opp gs://${bucket}/${v.visning}`);
+    if (godkjent.length > 0) o.ut("(tørrkjøring: bøtta er ikke kontaktet, så kollisjoner med eksisterende objekter er ikke sjekket)");
+  } else {
+    for (const v of godkjent) {
+      const mål = `gs://${bucket}/${v.objekt}`;
+      const r = o.gcloud!(["storage", "cp", `--content-type=${innholdstype(v.objekt)}`, "-", mål], v.bytes);
+      if (r.exitCode === 0) {
+        lastetOpp.push(v);
+        o.ut(`lastet opp gs://${bucket}/${v.visning}`);
+      } else {
+        feilet.push(v);
+        o.feil(`Feil: opplasting av ${v.visning} feilet (exit ${r.exitCode}): ${r.stderr.trim().split("\n").at(-1) ?? ""}`);
+      }
+    }
+  }
+
+  const sider = (valg.dryRun ? godkjent : lastetOpp).filter((v) => SIDE_ENDELSER.has(path.posix.extname(v.objekt).toLowerCase()));
+  if (sider.length > 0) {
+    o.ut(valg.dryRun ? "\nTørrkjøring — ingenting er lastet opp. Adresser etter publisering:" : "\nPublisert. Speilet i poden henter endringer omtrent hvert 2. minutt:");
+    for (const v of sider) o.ut(`  ${ingress}/wiki?wiki=melosys-felles&relPath=${encodeURIComponent(v.objekt)}`);
+  }
+  const avvist = vurderinger.filter((v) => v.avslag.length > 0);
+  o.ut(
+    valg.dryRun
+      ? `\nOppsummering: ${godkjent.length} klar(e), ${avvist.length} avvist.`
+      : `\nOppsummering: ${lastetOpp.length} lastet opp, ${avvist.length} avvist, ${feilet.length} feilet.`,
+  );
+  if (feilet.length > 0) return EXIT_FEILET;
+  if (avvist.length > 0) return EXIT_AVVIST;
+  return EXIT_OK;
+}
 
 function lesVars(): Record<string, unknown> {
   const fil = path.join(import.meta.dir, "..", "nais", "vars-q2.json");
@@ -282,109 +735,20 @@ function lesVars(): Record<string, unknown> {
   }
 }
 
-/**
- * Relativ posix-sti under roten, eller null når `abs` ligger utenfor. En fil
- * som finnes, måles etter at symlenker er løst opp, så en lenke ut av roten
- * ikke slipper gjennom.
- */
-function relUnder(rot: string, abs: string): string | null {
-  const r = path.relative(rot, existsSync(abs) ? realpathSync(abs) : abs);
-  if (r === "" || r.startsWith("..") || path.isAbsolute(r)) return null;
-  return r.split(path.sep).join("/");
+if (import.meta.main) {
+  const sti = Bun.which("gcloud");
+  const kode = kjør(process.argv.slice(2), {
+    env: process.env,
+    vars: lesVars(),
+    gcloud: sti
+      ? (args, stdin) => {
+          const r = Bun.spawnSync([sti, ...args], { stdin: stdin ?? "ignore", stdout: "pipe", stderr: "pipe" });
+          return { exitCode: r.exitCode ?? 1, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
+        }
+      : null,
+    spør: (s) => prompt(s),
+    ut: (l) => console.log(l),
+    feil: (l) => console.error(l),
+  });
+  process.exit(kode);
 }
-
-function main(): number {
-  const valg = lesArgs(process.argv.slice(2));
-  if (typeof valg === "string") {
-    if (valg) console.error(`Feil: ${valg}`);
-    console.error(BRUK);
-    return valg ? 2 : 0;
-  }
-  const vars = lesVars();
-  const bucket = valg.bucket ?? process.env.FELLES_WIKI_BUCKET ?? (typeof vars.felles_wiki_bucket === "string" ? vars.felles_wiki_bucket : undefined);
-  if (!bucket || !/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/.test(bucket)) {
-    console.error(`Feil: ingen gyldig bøtte (fikk ${JSON.stringify(bucket ?? null)}). Bruk --bucket eller FELLES_WIKI_BUCKET.`);
-    return 2;
-  }
-  const ingress = typeof vars.ingress_intern === "string" ? vars.ingress_intern : "https://melosys-muninn-q2.intern.dev.nav.no";
-  const oppgitt = path.resolve(valg.rot!);
-  if (!existsSync(oppgitt) || !statSync(oppgitt).isDirectory()) {
-    console.error(`Feil: wiki-roten ${oppgitt} finnes ikke eller er ikke en mappe`);
-    return 2;
-  }
-  const rot = realpathSync(oppgitt);
-
-  const vurderinger: Vurdering[] = [];
-  const sett = new Set<string>();
-  const vurder = (abs: string, rel: string) => {
-    if (sett.has(rel)) return undefined;
-    sett.add(rel);
-    const v = vurderFil(abs, rel, valg.tillatIdent);
-    vurderinger.push(v);
-    return v;
-  };
-
-  for (const s of valg.stier) {
-    const abs = path.resolve(rot, s);
-    const rel = relUnder(rot, abs);
-    if (!rel) {
-      vurderinger.push({ rel: s, avslag: ["stien ligger utenfor wiki-roten"], advarsler: [] });
-      continue;
-    }
-    const v = vurder(abs, rel);
-    if (!v || v.avslag.length > 0 || !SIDE_ENDELSER.has(path.posix.extname(rel).toLowerCase())) continue;
-    // Bilder siden viser, men bare fra en side som selv besto.
-    for (const bilde of refererteBilder(readFileSync(abs, "utf8"))) {
-      const bAbs = path.resolve(path.dirname(abs), bilde);
-      const bRel = relUnder(rot, bAbs);
-      if (!bRel) {
-        v.advarsler.push(`bildet ${bilde} ligger utenfor wiki-roten og lastes ikke opp`);
-        continue;
-      }
-      if (!existsSync(bAbs)) {
-        v.advarsler.push(`bildet ${bRel} finnes ikke lokalt`);
-        continue;
-      }
-      vurder(bAbs, bRel);
-    }
-  }
-
-  const godkjent = vurderinger.filter((v) => v.avslag.length === 0);
-  const avvist = vurderinger.filter((v) => v.avslag.length > 0);
-  for (const v of vurderinger) {
-    console.log(`${v.avslag.length ? "AVVIST " : "OK     "} ${v.rel}`);
-    for (const a of v.avslag) console.log(`    avslag: ${a}`);
-    for (const a of v.advarsler) console.log(`    advarsel: ${a}`);
-  }
-
-  if (valg.dryRun) for (const v of godkjent) console.log(`vil laste opp gs://${bucket}/${v.rel}`);
-  if (godkjent.length > 0 && !valg.dryRun) {
-    const gcloud = Bun.which("gcloud");
-    if (!gcloud) {
-      console.error("Feil: finner ikke gcloud på PATH — ingenting er lastet opp");
-      return 2;
-    }
-    for (const v of godkjent) {
-      const mål = `gs://${bucket}/${v.rel}`;
-      const r = Bun.spawnSync([gcloud, "storage", "cp", path.join(rot, v.rel), mål], { stdout: "inherit", stderr: "inherit" });
-      if (r.exitCode !== 0) {
-        console.error(`Feil: opplasting av ${v.rel} til ${mål} feilet (exit ${r.exitCode})`);
-        return 1;
-      }
-      console.log(`lastet opp ${mål}`);
-    }
-  }
-
-  const sider = godkjent.filter((v) => SIDE_ENDELSER.has(path.posix.extname(v.rel).toLowerCase()));
-  if (sider.length > 0) {
-    console.log(valg.dryRun ? "\nTørrkjøring — ingenting er lastet opp. Adresser etter publisering:" : "\nPublisert. Speilet i poden henter endringer omtrent hvert 2. minutt:");
-    for (const v of sider) console.log(`  ${ingress}/wiki?wiki=melosys-felles&relPath=${encodeURIComponent(v.rel)}`);
-  }
-  if (avvist.length > 0) {
-    console.log(`\n${avvist.length} fil(er) avvist og ikke lastet opp.`);
-    return 1;
-  }
-  return 0;
-}
-
-if (import.meta.main) process.exit(main());

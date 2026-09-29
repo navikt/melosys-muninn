@@ -45,7 +45,7 @@ to prevent.
 | `nais/provision-job.yaml` + `nais/provision-netpol.yaml` | The one-shot schema step, as a Naisjob. Applied by hand, not by a workflow — `kubectl debug` is unavailable to the team and the job needs a NetworkPolicy nais will not generate for it. See `docs/db-setup.md`. |
 | `.github/workflows/step-zero.yml` | Builds the echo image → pushes it → applies the stub. Deliberately separate from `deploy.yml`, which refuses while `vars-q2.json` holds a `REPLACE_ME`. |
 | `build/echo/` | The WebSocket echo image step zero deploys. Built by the workflow above; it has nothing to do with the muninn build. |
-| `scripts/publiser-felles-wiki.ts` | The curator's publish script for the felles-wiki bucket: file-type and identifier checks, then `gcloud storage cp`. Tests: `bun test scripts/` (no install step; Bun only). |
+| `scripts/publiser-felles-wiki.ts` | The curator's publish and retract script for the felles-wiki bucket: path, size and identifier checks, then an upload of the scanned bytes (`gcloud storage cp -`); `--fjern` deletes. Tests: `bun test scripts/` (no install step; Bun only). |
 | `CODEOWNERS` | The team, on everything. This repo is public and takes outside pull requests. |
 | `docs/` | The prerequisites, the schema runbook, step zero, why the bot folder looks the way it does, and every form of the pipeline's guards that was wrong. |
 
@@ -139,7 +139,7 @@ project owns the quota.
   group gate out of the login — and that gate is the only thing deciding who
   reaches the pod. `docs/PREREQUISITES.md` §4 has the measurement and the one
   test that would allow it back.
-- **Chat, plus one read-only wiki.** `MUNINN_PROFILE=nais` drops thirteen
+- **Chat, plus one read-only wiki.** `MUNINN_PROFILE=nais` drops fourteen
   route groups; the plans board, the capture verticals and the logs page are
   not registered. What is left is `/chat`, the operator dashboard, two health
   paths and — on a muninn ref that carries it — the read-only felles-wiki

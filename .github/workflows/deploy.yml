@@ -171,6 +171,35 @@ jobs:
             echo "::error::vars-q2.json still has placeholders: $UNFILLED — see docs/PREREQUISITES.md"; exit 1
           fi
 
+      # The felles-wiki values reach the manifest in three places: the bucket
+      # name as a gcp.buckets name and inside WIKI_BUCKET_MIRRORS, the project
+      # number as WIKI_BUCKET_MIRROR_PROJECT_NUMBER. Checked the same
+      # way as the Vertex values below — in jq, the values never cross into
+      # the shell, `-s` + `length == 1` against concatenated documents, `\A`/
+      # `\z` because Oniguruma's `$` matches before a trailing newline. The
+      # bucket rule is the lowercase DNS-label subset of GCS names (no dots,
+      # no underscores), which is also what scripts/publiser-felles-wiki.ts
+      # accepts.
+      - name: The felles-wiki values have a usable shape
+        run: |
+          jq -e -s 'length == 1 and (.[0] | type == "object")' deploy/nais/vars-q2.json > /dev/null || {
+            echo "::error::vars-q2.json is not exactly one JSON object (empty, unreadable, malformed, or two documents concatenated)"; exit 1
+          }
+          BAD=$(jq -r '
+            [ (if (.felles_wiki_bucket | type) == "string"
+                  and (.felles_wiki_bucket | test("\\A[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\\z"))
+               then empty
+               else "felles_wiki_bucket (expected lowercase letters, digits and inner hyphens, 3-63 characters)" end),
+              (if (.felles_wiki_project_number | type) == "string"
+                  and (.felles_wiki_project_number | test("\\A[0-9]{1,20}\\z"))
+               then empty
+               else "felles_wiki_project_number (expected digits only, as a JSON string)" end)
+            ] | join(", ")
+          ' deploy/nais/vars-q2.json)
+          if [ -n "$BAD" ]; then
+            echo "::error::not a usable value in vars-q2.json: $BAD"; exit 1
+          fi
+
       # The project and the region would otherwise live in FOUR places that
       # nothing compares: the bot's `baseUrl` (twice — project and region), the
       # manifest's `gcp.permissions`, the manifest's `VERTEX_PROJECT_ID` /

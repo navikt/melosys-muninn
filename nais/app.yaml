@@ -128,8 +128,8 @@ spec:
       # narrow it.
       #
       # The curator's own write access is NOT granted here — nais binds only the
-      # app's service account. It is an operator step, checked first with a
-      # test `gcloud storage cp`; see the doc section above.
+      # app's service account. It is an operator step, proved with a real
+      # publish of a harmless page; see the doc section above, "Operator steps".
       - name: {{ felles_wiki_bucket }}
         # false: deleting the Application must not delete the wiki. nais then
         # abandons the bucket instead (a deletion-policy annotation).
@@ -170,10 +170,11 @@ spec:
         # The GCS JSON API the felles-wiki mirror polls. Measured from the pod
         # on 2026-09-29, BEFORE this entry existed: a list call to
         # storage.googleapis.com got a 403 from Google itself (the SA lacks
-        # project-level list) — so the host is already reachable, likely over
-        # a Google-API path nais opens on its own. The entry states the intent
-        # anyway, so the mirror keeps working if that implicit path is ever
-        # tightened.
+        # project-level list), so the host was already reachable. The reason
+        # is nais's default egress to private.googleapis.com (Private Google
+        # Access), which carries the Google APIs. This entry is therefore not
+        # what opens the path today; it records the intent, so the dependency
+        # is visible here and survives a change to that default.
         - host: storage.googleapis.com
 
   resources:
@@ -305,14 +306,16 @@ spec:
     # A read-only wiki at /wiki?wiki=melosys-felles, mirrored from the bucket
     # declared under gcp.buckets. Needs a muninn ref carrying both the nais
     # read-only wiki slice (#615) and the bucket mirror (#616); an older ref
-    # ignores these three variables and the wiki does not appear.
+    # ignores these four variables and the wiki does not appear.
     #
     # The root is under /tmp because /tmp is the pod's only writable path: nais
     # runs the container with readOnlyRootFilesystem and mounts /tmp as an
     # emptyDir. muninn enforces the same from its side — a mirror root outside
-    # os.tmpdir() is refused. The price of an emptyDir: a restart (and every
-    # Recreate rollout) starts EMPTY, and the wiki fills on the mirror's first
-    # poll, seconds after boot. The poll interval is muninn's default,
+    # os.tmpdir() is refused. The price of an emptyDir: a NEW pod (every
+    # Recreate rollout, a reschedule) starts EMPTY, and the wiki fills on the
+    # mirror's first poll, seconds after boot. A container restart inside the
+    # same pod keeps the emptyDir, and the mirror adopts the files already
+    # there. The poll interval is muninn's default,
     # WIKI_BUCKET_MIRROR_INTERVAL_MS=120000.
     #
     # The one path is written three times, and all three must match: the
@@ -327,3 +330,11 @@ spec:
       value: "melosys-felles=/tmp/wikis/melosys-felles"
     - name: WIKI_READONLY_ROOTS
       value: "/tmp/wikis/melosys-felles"
+    # The project NUMBER that must own the bucket. The mirror reads the
+    # bucket's owning project before it mirrors anything, and refuses a bucket
+    # owned by another project. The bucket name is public in this repo and
+    # bucket names are global, so without this check anyone who created the
+    # name first (or after an accidental delete) would decide what the pod
+    # shows. Not secret: it is the number of gcp_project.
+    - name: WIKI_BUCKET_MIRROR_PROJECT_NUMBER
+      value: "{{ felles_wiki_project_number }}"
