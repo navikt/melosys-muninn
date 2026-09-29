@@ -482,23 +482,29 @@ every team member, so it refuses rather than warns:
 - **Paths** follow the mirror's own rules: `.md`, `.mdx`, `.html` and a root
   `.wiki-reader.json` only; no hidden segments, `..`, backslashes, control or
   bidi characters, or segments over 211 bytes. It also refuses the wildcard
-  characters `[ ] * ?`, symlinks, and a name that collides under lowercase + NFC
-  with a different object already in the bucket. Images and extracts (`.csv`,
+  characters `[ ] * ?`, a name ending in `#<digits>` (gcloud reads it as an
+  object generation), symlinks, and a name that collides under lowercase + NFC
+  with a different live object anywhere in the bucket. Images and extracts (`.csv`,
   `.json`, `.xlsx`, `.txt`) are never published; a page that shows local images
   gets a warning, because the images will not appear.
 - **Size**: over 2 MB the mirror skips the object, so the script refuses it.
+- **Encoding**: a UTF-16 or UTF-32 file (a byte-order mark or NUL bytes) is
+  refused; the mirror and the reader expect UTF-8, and the checks below cannot
+  read it.
 - **Content and file name**: national identity numbers, D-numbers and H-numbers
   (both check digits and a plausible date), organisation numbers (check digit in
   a data-like context), e-mail addresses and NAVidents (an uppercase letter and
   six digits). The text is normalised first — NFKC, HTML entities, zero-width
-  characters, non-breaking spaces — and digit groups split by table cells or
-  formatting are joined before the check-digit test. `--tillat-ident` lets
+  characters, non-breaking spaces, Hangul fillers — and digit groups split by
+  table cells, aligned columns, HTML cells (also one per line) or formatting
+  are joined before the check-digit test. `--tillat-ident` lets
   e-mail addresses and NAVidents through; an identity number has no override.
 - **Culled pages**: `signal: none` in the frontmatter, or
   `<meta name="wiki-signal" content="none">` in an `.html` page.
 
-Values are printed masked to their last two characters, and a path with a hit is
-never printed. The upload sends the scanned bytes on stdin
+Values are printed masked to their last two characters. A path with any hit,
+including one `--tillat-ident` lets through, is printed only in masked form, on
+every line: the upload line, the page URL, and gcloud's own error message. The upload sends the scanned bytes on stdin
 (`gcloud storage cp -`), so the file is read once and a local path is never
 handed to `gcloud`. Every approved file is tried even if one upload fails.
 Run it with `--dry-run` first; a dry run does not contact the bucket, so the
@@ -513,7 +519,7 @@ bun scripts/publiser-felles-wiki.ts <wiki-root> <relPath>...
 |---|---|
 | 0 | Everything was published (or would be, in a dry run). |
 | 1 | At least one file was refused by the checks, or a deletion was not confirmed. The others were published. |
-| 2 | Wrong usage or environment — no bucket, no `gcloud`, the bucket could not be listed. Nothing was done. |
+| 2 | Wrong usage or environment — no bucket, no `gcloud`, the bucket could not be listed or the listing had an unexpected shape. Nothing was done. |
 | 3 | At least one upload or deletion failed. The others went through; run again for the failed ones. |
 
 The scanner is a floor, not a review: it does not know a name from a word.
@@ -527,16 +533,18 @@ bun scripts/publiser-felles-wiki.ts --fjern --ja <relPath>...   # no question
 ```
 
 `<relPath>` is the object name in the bucket, the same path the page was
-published under. The bucket has no soft delete, so a deleted object is gone; the
+published under. The script prints what it will delete (`vil slette …`) before
+it asks, and `sletter …` only once you confirm. The bucket has no soft delete, so a deleted object is gone; the
 curator's local folder is the copy of record. The pod drops the page on its next
 poll, about 2 minutes later. If a page carried personal data, retract it first,
 then fix the local copy, then check the URL returns no page.
 
 ### Operator steps, in order
 
-1. **Deploy a muninn ref with both #615 and #616.** After muninn #616 merges,
-   dispatch `deploy` with the full 40-character SHA of muninn `main` at that
-   point. An older ref ignores the variables. The deploy creates the bucket.
+1. **Deploy a muninn ref with both #615 and #616.** Both are merged: dispatch
+   `deploy` with the full 40-character SHA of a muninn `main` commit at or
+   after `b23792b5` (the #616 merge). An older ref ignores the variables. The
+   deploy creates the bucket.
 2. **Check that the bucket is ours before publishing anything.** The name is
    public in this repo, and bucket names are global:
 

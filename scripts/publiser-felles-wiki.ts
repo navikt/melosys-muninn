@@ -13,10 +13,12 @@
  *   - sti: speilets egne regler — bare .md, .mdx, .html og `.wiki-reader.json`
  *     på rotnivå; ingen skjulte segmenter, `..`, omvendt skråstrek, kontroll-
  *     eller retningstegn, eller segmenter over 211 byte. I tillegg avvises
- *     jokertegnene `[ ] * ?` (gcloud tolker dem som mønster), symlenker og
- *     navn som kolliderer med et annet objekt under små bokstaver + NFC.
+ *     jokertegnene `[ ] * ?` (gcloud tolker dem som mønster), navn som slutter
+ *     på `#<sifre>` (gcloud leser det som en objektversjon), symlenker og navn
+ *     som kolliderer med et annet levende objekt under små bokstaver + NFC.
  *     Bilder og uttrekk (.csv .json .xlsx .txt) publiseres aldri.
  *   - størrelse: over 2 MB hopper speilet over objektet, så det avvises her.
+ *   - koding: UTF-16 og UTF-32 (merke eller NUL-byte) avvises.
  *   - innhold og filnavn: fødselsnummer, D-nummer og H-nummer (kontrollsifre +
  *     dato), organisasjonsnummer (kontrollsiffer i datalignende kontekst),
  *     e-postadresser og NAVident. Teksten normaliseres først (NFKC, HTML-
@@ -25,14 +27,16 @@
  *     `--tillat-ident`; et fødselsnummer har ingen overstyring.
  *   - culled: `signal: none` i frontmatter eller
  *     `<meta name="wiki-signal" content="none">`.
- * Verdier skrives maskert til de to siste tegnene, og en sti med funn skrives
- * aldri ut.
+ * Verdier skrives maskert til de to siste tegnene. En sti med funn, også en
+ * `--tillat-ident` slipper gjennom, skrives bare maskert — også i adressen og
+ * i gcloud sine feilmeldinger.
  *
  * Opplastingen sender de skannede byteene via stdin (`gcloud storage cp -`),
  * så filen leses bare én gang.
  *
  * Exit-koder: 0 alt gikk bra; 1 minst én fil avvist av sjekken, eller
- * slettingen ble ikke bekreftet; 2 feil bruk eller miljø (ingenting er gjort);
+ * slettingen ble ikke bekreftet; 2 feil bruk eller miljø, også en objektliste
+ * som ikke kan leses eller har uventet form (ingenting er gjort);
  * 3 minst én opplasting eller sletting feilet (de andre er gjennomført).
  *
  * Bøtte: `--bucket`, ellers FELLES_WIKI_BUCKET (tom verdi teller ikke), ellers
@@ -86,9 +90,14 @@ const NAVNGITTE_ENTITETER: Record<string, string> = {
   minus: "-", commat: "@", colon: ":", sol: "/", verbar: "|", vert: "|", lowbar: "_", num: "#", ast: "*", midast: "*",
 };
 
-/** HTML-entiteter: numeriske (`;` valgfri) og navngitte (`;` påkrevd). */
+/**
+ * HTML-entiteter: numeriske (`;` valgfri), navngitte (`;` påkrevd) og de
+ * eldre navnene nettleseren også leser uten `;` (`&nbsp12345` er et hardt
+ * mellomrom foran 12345).
+ */
 export function dekodEntiteter(s: string): string {
-  return s.replace(/&(?:#(\d{1,7});?|#[xX]([0-9a-fA-F]{1,6});?|([A-Za-z][A-Za-z0-9]{1,31});)/g, (hel, des, heks, navn) => {
+  return s.replace(/&(?:#(\d{1,7});?|#[xX]([0-9a-fA-F]{1,6});?|([A-Za-z][A-Za-z0-9]{1,31});|(nbsp|shy|amp|lt|gt|quot))/g, (hel, des, heks, navn, eldre) => {
+    if (eldre !== undefined) return NAVNGITTE_ENTITETER[eldre]!;
     if (navn !== undefined) return NAVNGITTE_ENTITETER[navn] ?? hel;
     const kp = des !== undefined ? Number(des) : parseInt(heks, 16);
     if (kp > 0x10ffff || (kp >= 0xd800 && kp <= 0xdfff)) return "";
@@ -97,7 +106,13 @@ export function dekodEntiteter(s: string): string {
   });
 }
 
-const USYNLIGE = /[\u00ad\u180e\u200b-\u200f\u2060-\u2064\ufeff]/g;
+/**
+ * Tegn som vises som ingenting. Hangul-fyllene (U+115F, U+1160, U+3164,
+ * U+FFA0) er bokstaver for Unicode, og ville ellers stoppet projeksjonen, som
+ * ikke slår sammen over bokstaver. Listen brukes etter NFKC, som gjør U+FFA0
+ * og U+3164 til U+1160.
+ */
+const USYNLIGE = /[\u00ad\u115f\u1160\u180e\u200b-\u200f\u2060-\u2064\u3164\ufeff\uffa0]/g;
 const BINDESTREKER = /[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]/g;
 
 /**
@@ -172,7 +187,9 @@ export function gyldigOrgnr(nr: string): boolean {
   return k !== null && k === d[8];
 }
 
-const ORG_ORD = /org(anisasjons)?\.?\s*-?\s*(nr|nummer)|orgnr|\borgnum|(virksomhets|foretaks|enhets)\.?\s*-?\s*(nr|nummer)/i;
+// `\s*(?:-\s*)?`, ikke `\s*-?\s*`: to `\s*` etter hverandre gir kvadratisk
+// tilbakesporing på en lang rekke mellomrom (målt 2,3 s på 64k).
+const ORG_ORD = /org(?:anisasjons)?\.?\s*(?:-\s*)?(?:nr|nummer)|orgnr|\borgnum|(?:virksomhets|foretaks|enhets)\.?\s*(?:-\s*)?(?:nr|nummer)/i;
 
 /**
  * Når et gyldig 9-sifret tall regnes som et organisasjonsnummer. Et tall med
@@ -202,17 +219,20 @@ const RE_9 = /(?<!\d)(\d{3})[ .]?(\d{3})[ .]?(\d{3})(?!\d)/g;
 const RE_NAVIDENT = /(?<![A-Za-z0-9])[A-Z]\d{6}(?![A-Za-z0-9])/g;
 /** Tegn mellom sifergrupper som projeksjonen slår sammen over. */
 const MAKS_MELLOMROM_PROJEKSJON = 5;
+/** En rekke blanke, `|` og HTML-tagger. Hver rekke teller som ett skilletegn. */
+const SKILLEREKKE = /(?:\s|\||<[^<>]{0,200}>)+/g;
 
 /**
- * 11-sifrede kandidater fra linjens sifre alene. Sifergrupper skilt av korte
- * mellomrom uten bokstaver slås sammen, og hver sammenhengende rekke grupper
- * som til sammen har nøyaktig 11 sifre, blir en kandidat. Det dekker
- * `15038512345`, `150385 12345`, `150385.12345`, `15.03.85 12345`,
- * `| 150385 | 12345 |`, `**150385**12345` og `<td>…</td><td>…</td>` (en
- * HTML-tagg teller som ett tegn), men ikke `150385 og 12345`.
+ * 11-sifrede kandidater fra linjens sifre alene. Hver rekke av blanke, `|` og
+ * HTML-tagger telles først som ett tegn. Sifergrupper skilt av høyst
+ * MAKS_MELLOMROM_PROJEKSJON tegn uten bokstaver slås så sammen, og hver
+ * sammenhengende rekke grupper som til sammen har nøyaktig 11 sifre, blir en
+ * kandidat. Det dekker `15038512345`, `150385 12345`, `150385.12345`,
+ * `15.03.85 12345`, `| 150385     | 12345 |` (prettier-justert),
+ * `**150385**12345` og `<td>…</td><td>…</td>`, men ikke `150385 og 12345`.
  */
 export function sifferkandidater(linje: string): string[] {
-  const uten = linje.replace(/<[^<>]{0,200}>/g, "\u0000");
+  const uten = linje.replace(SKILLEREKKE, " ");
   const ut: string[] = [];
   let gruppe: string[] = [];
   let forrigeSlutt = -1;
@@ -267,6 +287,11 @@ export function finnEpost(linje: string): string[] {
   }
 }
 
+/** Linjen består bare av tabellceller: tagger, sifre, blanke og `| . -`, og minst én tagg. */
+function erCellelinje(linje: string): boolean {
+  return /<[^<>]{0,200}>/.test(linje) && /\d/.test(linje) && /^[\d\s|.-]*$/.test(linje.replace(/<[^<>]{0,200}>/g, ""));
+}
+
 /** Kodeblokk-gjerde: tegn og lengde, så ``` inne i en ````-blokk ikke lukker den. */
 function gjerde(linje: string): { tegn: string; lengde: number; resten: string } | null {
   const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(linje);
@@ -285,6 +310,20 @@ export function skannTekst(tekst: string): Funn[] {
   };
   let åpen: { tegn: string; lengde: number } | null = null;
   const linjer = tekst.split(/\r?\n/);
+  // HTML med én celle per linje (`<td>150385</td>` / `<td>12345</td>`): en
+  // rekke slike linjer projiseres også samlet. Bare kandidater ingen enkelt
+  // linje i rekken ga, telles der, så antallet ikke dobles.
+  let celler: { start: number; tekst: string[]; enkelt: Set<string> } | null = null;
+  const tømCeller = () => {
+    if (celler && celler.tekst.length > 1) {
+      for (const tall of new Set(sifferkandidater(celler.tekst.join(" ")))) {
+        if (celler.enkelt.has(tall)) continue;
+        const type = klassifiser11(tall);
+        if (type) legg(celler.start, type, tall, false);
+      }
+    }
+    celler = null;
+  };
   for (let i = 0; i < linjer.length; i++) {
     const rå = linjer[i]!;
     const nr = i + 1;
@@ -295,10 +334,16 @@ export function skannTekst(tekst: string): Funn[] {
     else if (g && åpen && g.tegn === åpen.tegn && g.lengde >= åpen.lengde && g.resten.trim() === "") åpen = null;
     const iKodeblokk = varÅpen && åpen !== null;
     const linje = normaliserLinje(rå);
-    for (const tall of new Set(sifferkandidater(linje))) {
+    const enkelt = new Set(sifferkandidater(linje));
+    for (const tall of enkelt) {
       const type = klassifiser11(tall);
       if (type) legg(nr, type, tall, false);
     }
+    if (erCellelinje(linje)) {
+      celler ??= { start: nr, tekst: [], enkelt: new Set() };
+      celler.tekst.push(linje);
+      for (const t of enkelt) celler.enkelt.add(t);
+    } else tømCeller();
     if (erDatakontekst(linje, iKodeblokk)) {
       const ni = new Set<string>();
       for (const m of linje.matchAll(RE_9)) ni.add(m[1]! + m[2]! + m[3]!);
@@ -307,6 +352,7 @@ export function skannTekst(tekst: string): Funn[] {
     for (const e of finnEpost(linje)) legg(nr, "e-post", e, true);
     for (const m of linje.matchAll(RE_NAVIDENT)) legg(nr, "NAVident", m[0], true);
   }
+  tømCeller();
   return [...funn.values()];
 }
 
@@ -339,6 +385,7 @@ function sjekkStiform(rel: string): string | null {
   if (rel === "" || rel.startsWith("/") || rel.includes("\\")) return "ugyldig sti";
   if (KONTROLLTEGN.test(rel)) return "stien har kontrolltegn eller retningstegn";
   if (JOKERTEGN.test(rel)) return "stien har et jokertegn ([ ] * ?) som gcloud tolker som mønster";
+  if (/#\d+$/.test(rel)) return "stien slutter på #<sifre>, som gcloud leser som en objektversjon";
   const deler = rel.normalize("NFC").split("/");
   if (deler.some((d) => d === "" || d === "." || d === "..")) return "stien peker ut av wiki-roten";
   if (deler.some((d) => Buffer.byteLength(d) > MAKS_SEGMENT_BYTES)) return `et stisegment er lengre enn ${MAKS_SEGMENT_BYTES} byte`;
@@ -399,6 +446,18 @@ export interface Vurdering {
   bytes?: Uint8Array;
 }
 
+/**
+ * UTF-16 eller UTF-32 (byte-rekkefølgemerke eller NUL-byte), eller null. En
+ * slik fil dekodet som UTF-8 har en NUL mellom hvert tegn, og da treffer
+ * verken e-post, NAVident eller stikkordene for organisasjonsnummer.
+ */
+function ikkeUtf8(b: Uint8Array): string | null {
+  if (b.length >= 4 && b[0] === 0 && b[1] === 0 && b[2] === 0xfe && b[3] === 0xff) return "filen er UTF-32";
+  if (b.length >= 2 && ((b[0] === 0xff && b[1] === 0xfe) || (b[0] === 0xfe && b[1] === 0xff))) return "filen er UTF-16 eller UTF-32";
+  if (b.includes(0)) return "filen har NUL-byte (trolig UTF-16 uten merke)";
+  return null;
+}
+
 /** Vurderer én fil på disk. `abs` må ligge under roten; symlenker avvises. */
 export function vurderFil(abs: string, rel: string, tillatIdent: boolean, nr?: number): Vurdering {
   const visning = visningsnavn(rel, nr);
@@ -435,6 +494,11 @@ export function vurderFil(abs: string, rel: string, tillatIdent: boolean, nr?: n
   const bytes = readFileSync(abs);
   if (bytes.length > MAKS_BYTES) {
     v.avslag.push(grense);
+    return v;
+  }
+  const koding = ikkeUtf8(bytes);
+  if (koding) {
+    v.avslag.push(`${koding} — speilet og leseren forventer UTF-8, og skanneren kan ikke lese filen`);
     return v;
   }
   const tekst = new TextDecoder("utf-8").decode(bytes);
@@ -553,16 +617,52 @@ function velgBøtte(valg: Valg, o: Omgivelser): string | undefined {
   return valg.bucket ?? (env || undefined) ?? (typeof o.vars.felles_wiki_bucket === "string" ? o.vars.felles_wiki_bucket : undefined);
 }
 
-/** Objektnavnene i bøtta, eller en feilmelding. */
+/**
+ * Navnene på de levende objektene i bøtta, eller en feilmelding.
+ *
+ * `gs://<bøtte>/**`, ikke `gs://<bøtte>`: gcloud gjør en bar bøtte om til
+ * `gs://<bøtte>/*`, som bare lister toppnivået, og nesten alle sider ligger i
+ * en mappe. `objects list` tar med ikke-gjeldende versjoner som standard og
+ * har ikke noe flagg som bare gir de levende (`--stat` endrer utdataformatet),
+ * så en versjon med `noncurrent_time` hoppes over her — speilet ser den ikke.
+ * En liste med en annen form enn ventet avviser hele kjøringen, i stedet for
+ * å sjekke mot en liste som kanskje mangler navn.
+ */
 function listObjekter(bucket: string, o: Omgivelser): string[] | string {
-  const r = o.gcloud!(["storage", "objects", "list", `gs://${bucket}`, "--format=json(name)"]);
-  if (r.exitCode !== 0) return `gcloud storage objects list feilet (exit ${r.exitCode}): ${r.stderr.trim().split("\n").at(-1) ?? ""}`;
+  const r = o.gcloud!(["storage", "objects", "list", `gs://${bucket}/**`, "--format=json(name,noncurrent_time)"]);
+  if (r.exitCode !== 0) return `gcloud storage objects list feilet (exit ${r.exitCode}): ${maskerGcloud(r.stderr, [])}`;
+  let data: unknown;
   try {
-    const data = JSON.parse(r.stdout.trim() || "[]") as { name?: unknown }[];
-    return data.map((x) => x.name).filter((n): n is string => typeof n === "string");
+    data = JSON.parse(r.stdout.trim() || "[]");
   } catch {
     return "kunne ikke lese objektlisten fra gcloud";
   }
+  if (!Array.isArray(data)) return "objektlisten fra gcloud er ikke en liste";
+  const navn: string[] = [];
+  for (const x of data) {
+    if (typeof x !== "object" || x === null || typeof (x as { name?: unknown }).name !== "string") {
+      return "objektlisten fra gcloud har en oppføring uten navn";
+    }
+    if ((x as { noncurrent_time?: unknown }).noncurrent_time != null) continue;
+    navn.push((x as { name: string }).name);
+  }
+  return navn;
+}
+
+/**
+ * Siste linje av gcloud sin feilmelding, uten objektnavn med funn: hvert
+ * kjente navn byttes med sin maskerte visning, og har linjen fortsatt et funn,
+ * skjules hele linjen.
+ */
+function maskerGcloud(stderr: string, navn: { objekt: string; visning: string }[]): string {
+  let linje = stderr.trim().split("\n").at(-1) ?? "";
+  for (const n of navn) {
+    if (skannTekst(n.objekt).length === 0) continue;
+    for (const form of new Set([n.objekt, n.objekt.normalize("NFD"), encodeURIComponent(n.objekt)])) linje = linje.split(form).join(n.visning);
+  }
+  const funn = skannTekst(linje);
+  if (funn.length > 0) return `[feilmeldingen er skjult: inneholder ${[...new Set(funn.map((f) => f.type))].join(", ")}]`;
+  return linje;
 }
 
 function fjern(valg: Valg, bucket: string, o: Omgivelser): number {
@@ -580,7 +680,7 @@ function fjern(valg: Valg, bucket: string, o: Omgivelser): number {
     o.ut(`\n${avvist} sti(er) avvist — ingenting er slettet.`);
     return EXIT_AVVIST;
   }
-  for (const m of mål) o.ut(`${valg.dryRun ? "vil slette" : "sletter"} gs://${bucket}/${m.visning}`);
+  for (const m of mål) o.ut(`vil slette gs://${bucket}/${m.visning}`);
   if (valg.dryRun) {
     o.ut("\nTørrkjøring — ingenting er slettet.");
     return EXIT_OK;
@@ -598,11 +698,12 @@ function fjern(valg: Valg, bucket: string, o: Omgivelser): number {
   }
   let feilet = 0;
   for (const m of mål) {
+    o.ut(`sletter gs://${bucket}/${m.visning}`);
     const r = o.gcloud(["storage", "rm", `gs://${bucket}/${m.objekt}`]);
     if (r.exitCode === 0) o.ut(`slettet gs://${bucket}/${m.visning}`);
     else {
       feilet++;
-      o.feil(`Feil: sletting av gs://${bucket}/${m.visning} feilet (exit ${r.exitCode})`);
+      o.feil(`Feil: sletting av gs://${bucket}/${m.visning} feilet (exit ${r.exitCode}): ${maskerGcloud(r.stderr, [m])}`);
     }
   }
   o.ut(`\nOppsummering: ${mål.length - feilet} slettet, ${feilet} feilet. Poden fjerner sidene ved neste poll (~2 min).`);
@@ -705,7 +806,7 @@ export function kjør(argv: string[], o: Omgivelser): number {
         o.ut(`lastet opp gs://${bucket}/${v.visning}`);
       } else {
         feilet.push(v);
-        o.feil(`Feil: opplasting av ${v.visning} feilet (exit ${r.exitCode}): ${r.stderr.trim().split("\n").at(-1) ?? ""}`);
+        o.feil(`Feil: opplasting av ${v.visning} feilet (exit ${r.exitCode}): ${maskerGcloud(r.stderr, [v])}`);
       }
     }
   }
@@ -713,7 +814,8 @@ export function kjør(argv: string[], o: Omgivelser): number {
   const sider = (valg.dryRun ? godkjent : lastetOpp).filter((v) => SIDE_ENDELSER.has(path.posix.extname(v.objekt).toLowerCase()));
   if (sider.length > 0) {
     o.ut(valg.dryRun ? "\nTørrkjøring — ingenting er lastet opp. Adresser etter publisering:" : "\nPublisert. Speilet i poden henter endringer omtrent hvert 2. minutt:");
-    for (const v of sider) o.ut(`  ${ingress}/wiki?wiki=melosys-felles&relPath=${encodeURIComponent(v.objekt)}`);
+    // En sti med funn, også en som --tillat-ident slapp gjennom, vises maskert her som overalt ellers.
+    for (const v of sider) o.ut(`  ${ingress}/wiki?wiki=melosys-felles&relPath=${v.visning === v.rel ? encodeURIComponent(v.objekt) : v.visning}`);
   }
   const avvist = vurderinger.filter((v) => v.avslag.length > 0);
   o.ut(

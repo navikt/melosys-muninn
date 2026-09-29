@@ -180,6 +180,10 @@ jobs:
       # bucket rule is the lowercase DNS-label subset of GCS names (no dots,
       # no underscores), which is also what scripts/publiser-felles-wiki.ts
       # accepts.
+      # The project-number rule is muninn's own parser for
+      # WIKI_BUCKET_MIRROR_PROJECT_NUMBER (`^[1-9]\d{0,19}$`, muninn #616):
+      # a value it refuses ("0", a leading zero) only makes the mirror warn and
+      # pin nothing, so it is refused here instead.
       - name: The felles-wiki values have a usable shape
         run: |
           jq -e -s 'length == 1 and (.[0] | type == "object")' deploy/nais/vars-q2.json > /dev/null || {
@@ -191,9 +195,9 @@ jobs:
                then empty
                else "felles_wiki_bucket (expected lowercase letters, digits and inner hyphens, 3-63 characters)" end),
               (if (.felles_wiki_project_number | type) == "string"
-                  and (.felles_wiki_project_number | test("\\A[0-9]{1,20}\\z"))
+                  and (.felles_wiki_project_number | test("\\A[1-9][0-9]{0,19}\\z"))
                then empty
-               else "felles_wiki_project_number (expected digits only, as a JSON string)" end)
+               else "felles_wiki_project_number (expected 1-20 digits with no leading zero, as a JSON string)" end)
             ] | join(", ")
           ' deploy/nais/vars-q2.json)
           if [ -n "$BAD" ]; then

@@ -65,6 +65,37 @@ describe("fødselsnummer i realistiske skrivemåter", () => {
     expect(typer(`Saken gjelder ${tekst} i dag.`)).toEqual(["fødselsnummer"]);
   });
 
+  test.each([
+    ["prettier-justert tabell", `| ${DATO}        | ${PERS}      |`],
+    ["seks mellomrom", `${DATO}      ${PERS}`],
+    ["&nbsp uten semikolon", `${DATO}&nbsp${PERS}`],
+    ["Hangul-fyll U+3164", `${DATO}\u3164${PERS}`],
+    ["Hangul-fyll U+115F", `${DATO}\u115f${PERS}`],
+    ["Hangul-fyll U+1160", `${DATO}\u1160${PERS}`],
+    ["halvbredde Hangul-fyll U+FFA0", `${DATO}\uffa0${PERS}`],
+  ])("runde 2: %s", (_navn, tekst) => {
+    expect(typer(`Saken gjelder ${tekst} i dag.`)).toEqual(["fødselsnummer"]);
+  });
+
+  test("HTML med én celle per linje", () => {
+    expect(skannTekst(`<tr>\n<td>${DATO}</td>\n<td>${PERS}</td>\n</tr>`).map((f) => [f.type, f.linje])).toEqual([["fødselsnummer", 2]]);
+    expect(typer(`  <td>${DATO.slice(0, 2)}.${DATO.slice(2, 4)}.${DATO.slice(4)}</td>\n  <td>${PERS}</td>`)).toEqual(["fødselsnummer"]);
+    // Et nummer som alt står helt på én linje, telles ikke én gang til av rekken.
+    expect(skannTekst(`<td>${FNR}</td>\n<td>42</td>`).map((f) => f.antall)).toEqual([1]);
+    // En tallkolonne uten tagger slås ikke sammen over linjer.
+    expect(typer(`${DATO}\n${PERS}`)).toEqual([]);
+  });
+
+  test("grensen for mellomrommet: 5 tegn slås sammen, 6 gjør det ikke", () => {
+    expect(typer(`${DATO}-.-.-${PERS}`)).toEqual(["fødselsnummer"]);
+    expect(typer(`${DATO}-.-.-.${PERS}`)).toEqual([]);
+  });
+
+  test("en HTML-tagg teller som nøyaktig ett tegn", () => {
+    expect(typer(`${DATO}.-.-<span class="x">${PERS}`)).toEqual(["fødselsnummer"]);
+    expect(typer(`${DATO}.-.-.<b>${PERS}`)).toEqual([]);
+  });
+
   test("projeksjonen slår ikke sammen over ord, og krever gyldige kontrollsifre", () => {
     expect(typer(`| ${DATO} | ${PERS} |`)).toEqual(["fødselsnummer"]);
     expect(typer(`${DATO} og ${PERS}`)).toEqual([]);
@@ -121,6 +152,18 @@ describe("organisasjonsnummer", () => {
     const tekst = ["````", "```", "````", `Det kom ${ORGNR} brev.`].join("\n");
     expect(typer(tekst)).toEqual([]);
   });
+  test("et lukkegjerde med info-streng lukker ikke blokken", () => {
+    const tekst = ["```", "```js", `Det kom ${ORGNR} brev.`, "```"].join("\n");
+    expect(skannTekst(tekst).map((f) => f.linje)).toEqual([3]);
+  });
+  test("``` med backtick i info-strengen åpner ingen blokk", () => {
+    const tekst = ["```x`y", `Det kom ${ORGNR} brev.`].join("\n");
+    expect(typer(tekst)).toEqual([]);
+  });
+  test("org-stikkord med mellomrom og bindestrek virker fortsatt", () => {
+    expect(typer(`org   -  nr ${ORGNR}`)).toEqual(["organisasjonsnummer"]);
+    expect(typer(`virksomhets - nummer ${ORGNR}`)).toEqual(["organisasjonsnummer"]);
+  });
   test("~~~ lukker ikke en ```-blokk", () => {
     const tekst = ["```", "~~~", `${ORGNR}`, "```"].join("\n");
     expect(skannTekst(tekst).map((f) => f.linje)).toEqual([3]);
@@ -134,6 +177,22 @@ describe("e-post er lineær", () => {
     expect(skannTekst(linje)).toEqual([]);
     expect(performance.now() - t0).toBeLessThan(1000);
     expect(typer("skriv til ola.nordmann@example.no i dag")).toEqual(["e-post"]);
+  });
+});
+
+describe("stikkordene for organisasjonsnummer er lineære", () => {
+  test.each([["org"], ["virksomhets"], ["foretaks.-"]])("%s + 1 MB mellomrom skannes på under ett sekund", (start) => {
+    const linje = start + " ".repeat(1024 * 1024);
+    const t0 = performance.now();
+    expect(skannTekst(linje)).toEqual([]);
+    expect(performance.now() - t0).toBeLessThan(1000);
+  });
+});
+
+describe("e-post med Unicode-bindestrek i domenet", () => {
+  test("U+2010 i domenet blir `-`, og hele adressen fanges", () => {
+    const funn = skannTekst("skriv til ola@nav\u2010test.example i dag");
+    expect(funn.map((f) => [f.type, f.maskert])).toEqual([["e-post", "*".repeat(18) + "le"]]);
   });
 });
 
@@ -188,6 +247,17 @@ describe("vurderFil", () => {
     const akkurat = Buffer.alloc(2 * 1024 * 1024, "aaaaaaa\n");
     expect(vurderFil(skriv("grense.md", akkurat), "grense.md", false).avslag).toEqual([]);
   });
+  test.each([
+    ["UTF-16LE med merke", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("skriv til ola@example.no\n", "utf16le")])],
+    ["UTF-16BE med merke", Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from("skriv til ola@example.no\n", "utf16le").swap16()])],
+    ["UTF-16LE uten merke", Buffer.from("skriv til ola@example.no\n", "utf16le")],
+    ["UTF-32BE med merke", Buffer.from([0, 0, 0xfe, 0xff, 0, 0, 0, 0x61])],
+  ])("%s avvises", (_navn, bytes) => {
+    const v = vurderFil(skriv("utf16.md", bytes), "utf16.md", false);
+    expect(v.avslag.join(" ")).toMatch(/UTF-16|UTF-32|NUL/);
+    expect(v.bytes).toBeUndefined();
+  });
+
   test("HTML-side med wiki-signal=none avvises", () => {
     const rel = "stille.html";
     const v = vurderFil(skriv(rel, '<html><head><meta name="wiki-signal" content="none"></head><body>x</body></html>'), rel, false);

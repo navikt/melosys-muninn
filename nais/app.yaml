@@ -172,7 +172,9 @@ spec:
         # storage.googleapis.com got a 403 from Google itself (the SA lacks
         # project-level list), so the host was already reachable. The reason
         # is nais's default egress to private.googleapis.com (Private Google
-        # Access), which carries the Google APIs. This entry is therefore not
+        # Access), which carries the Google APIs: doc.nais.io/workloads/
+        # reference/access-policies/, "Default allowed external hosts" lists
+        # private.googleapis.com:443 for every workload. This entry is therefore not
         # what opens the path today; it records the intent, so the dependency
         # is visible here and survives a change to that default.
         - host: storage.googleapis.com
