@@ -278,7 +278,7 @@ to select an already authenticated account to use.
 // De andre formene gcloud skriver (googlecloudsdk/core/credentials, exceptions.py
 // og store.py): ingen aktiv konto, manglende legitimasjon for kontoen (uten
 // config set account), og ADC, som ber om en annen kommando.
-const INGEN_AKTIV_KONTO = UTLØPT_INNLOGGING.replace(
+const INGEN_AKTIV_KONTO = UTLØPT_INNLOGGING.replace("objects.list", "cp").replace(
   "There was a problem refreshing your current auth tokens: Reauthentication failed. cannot prompt during non-interactive execution.",
   "You do not currently have an active account selected.",
 );
@@ -330,7 +330,7 @@ describe("utløpt gcloud-innlogging", () => {
     expect(r.ut).toContain(HINT);
     expect(r.ut).not.toContain("to select an already authenticated account");
   });
-  test("listefeilen er én lesbar setning: hintet har ingen tankestrek", () => {
+  test("listefeilen viser hele hintet foran listefeilens egen forklaring", () => {
     skriv("a.md", "# A\n");
     writeFileSync(path.join(falsk, "liste-feil"), "");
     writeFileSync(path.join(falsk, "feilmelding"), UTLØPT_INNLOGGING);
