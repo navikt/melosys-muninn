@@ -48,7 +48,7 @@ d="$FAKE_GCLOUD_DIR"
 n=$(( $(cat "$d/n" 2>/dev/null || echo 0) + 1 )); echo $n > "$d/n"
 printf '%s\\n' "$@" > "$d/kall-$n.args"
 if [ "$1 $2 $3" = "storage objects list" ]; then
-  if [ -f "$d/liste-feil" ]; then echo "falsk listefeil" >&2; exit 1; fi
+  if [ -f "$d/liste-feil" ]; then if [ -f "$d/feilmelding" ]; then cat "$d/feilmelding" >&2; else echo "falsk listefeil" >&2; fi; exit 1; fi
   exec bun "$d/../liste.ts" "$d/liste.json" "$4" "$5"
 fi
 last="\${@: -1}"
@@ -256,6 +256,44 @@ describe("maskering av stier sluppet gjennom med --tillat-ident", () => {
     expect(r.kode).toBe(3);
     expect(r.ut).toContain("[feilmeldingen er skjult: inneholder NAVident]");
     expect(r.ut).not.toContain("Z991111");
+  });
+});
+
+// Teksten gcloud skrev da innloggingen gikk ut (2026-09-30); siste linje sier
+// ingenting om årsaken.
+const UTLØPT_INNLOGGING = `ERROR: (gcloud.storage.objects.list) There was a problem refreshing your current auth tokens: Reauthentication failed. cannot prompt during non-interactive execution.
+Please run:
+
+  $ gcloud auth login
+
+to obtain new credentials.
+
+If you have already logged in with a different account, run:
+
+  $ gcloud config set account ACCOUNT
+
+to select an already authenticated account to use.
+`;
+
+describe("utløpt gcloud-innlogging", () => {
+  test("en listefeil ber om gcloud auth login i stedet for å vise halen av meldingen", () => {
+    skriv("a.md", "# A\n");
+    writeFileSync(path.join(falsk, "liste-feil"), "");
+    writeFileSync(path.join(falsk, "feilmelding"), UTLØPT_INNLOGGING);
+    const r = kjør([rot, "a.md"]);
+    expect(r.kode).toBe(2);
+    expect(r.ut).toContain("kjør `gcloud auth login`");
+    expect(r.ut).not.toContain("to select an already authenticated account");
+    expect(opplastinger()).toEqual([]);
+  });
+  test("en feilet opplasting med utløpt innlogging ber om gcloud auth login", () => {
+    skriv("a.md", "# A\n");
+    writeFileSync(path.join(falsk, "feil"), "gs://felles-test/a.md\n");
+    writeFileSync(path.join(falsk, "feilmelding"), UTLØPT_INNLOGGING.replace("objects.list", "cp"));
+    const r = kjør([rot, "a.md"]);
+    expect(r.kode).toBe(3);
+    expect(r.ut).toContain("kjør `gcloud auth login`");
+    expect(r.ut).not.toContain("to select an already authenticated account");
   });
 });
 

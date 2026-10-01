@@ -550,7 +550,7 @@ then fix the local copy, then check the URL returns no page.
 
    ```bash
    kubectl get storagebucket melosys-felles-wiki-q2 -n teammelosys   # READY True, UpToDate
-   gcloud storage buckets describe gs://melosys-felles-wiki-q2 --format='value(project_number)'
+   gcloud storage buckets describe gs://melosys-felles-wiki-q2 --raw --format='value(projectNumber)'
    ```
 
    The number must equal `felles_wiki_project_number` in `nais/vars-q2.json`.
