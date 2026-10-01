@@ -15,7 +15,7 @@
 # to them stops the deploy until it is mirrored here and re-pinned.
 
 # --- build: has a shell and a package manager; nothing from it ships but /app ---
-FROM europe-north1-docker.pkg.dev/nais-management-233d/teammelosys/dhi-bun:1.4.2-debian13-dev@sha256:8b73e8388f1a1ae32b9f88004184c0462e5a5c15080ff5aef1b4fb94d8f880bf AS build
+FROM europe-north1-docker.pkg.dev/nais-management-233d/teammelosys/dhi-bun:1.4.2-debian13.7-dev@sha256:d291d2c4fec5855c36e206cdee07cb046d16e132b0fecb7ad0d68bab9c1853d3 AS build
 WORKDIR /app
 
 COPY package.json bun.lock ./
@@ -38,7 +38,7 @@ COPY bots ./bots/
 COPY nais-entrypoint.ts ./
 
 # --- runtime: no shell, no package manager, non-root (65532) ---
-FROM europe-north1-docker.pkg.dev/nais-management-233d/teammelosys/dhi-bun:1.4.2-debian13@sha256:db865526a0b05564a3aa114f17e0eafe6d83cbdc50451d7d7dfb7c632368d8fd
+FROM europe-north1-docker.pkg.dev/nais-management-233d/teammelosys/dhi-bun:1.4.2-debian13.7@sha256:be53b056dc651b7c83471e90fdb69c9614c83d5860e21b944df436bc6d86b5ba
 # COPY before WORKDIR: a WORKDIR created first is owned by the image user
 # (65532), so the app could write into /app. Created by COPY, /app is root's.
 # The pod also runs with a read-only root filesystem (LOG_DIR=none).
