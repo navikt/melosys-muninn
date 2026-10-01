@@ -671,8 +671,8 @@ function listObjekter(bucket: string, o: Omgivelser): string[] | string {
  * bare halen av forklaringen, så da sier vi det rett ut i stedet.
  */
 function maskerGcloud(stderr: string, navn: { objekt: string; visning: string }[]): string {
-  if (/\$ gcloud auth login\b/.test(stderr)) {
-    return "gcloud-innloggingen har gått ut eller mangler — kjør `gcloud auth login` og prøv igjen";
+  if (/\$ gcloud auth login/.test(stderr)) {
+    return "gcloud fikk ikke fornyet innloggingen; kjør `gcloud auth login`, eller velg riktig konto med `gcloud config set account`, og prøv igjen";
   }
   let linje = stderr.trim().split("\n").at(-1) ?? "";
   for (const n of navn) {

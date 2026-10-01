@@ -282,7 +282,7 @@ describe("utløpt gcloud-innlogging", () => {
     writeFileSync(path.join(falsk, "feilmelding"), UTLØPT_INNLOGGING);
     const r = kjør([rot, "a.md"]);
     expect(r.kode).toBe(2);
-    expect(r.ut).toContain("kjør `gcloud auth login`");
+    expect(r.ut).toContain("kjør `gcloud auth login`, eller velg riktig konto med `gcloud config set account`");
     expect(r.ut).not.toContain("to select an already authenticated account");
     expect(opplastinger()).toEqual([]);
   });
@@ -292,8 +292,25 @@ describe("utløpt gcloud-innlogging", () => {
     writeFileSync(path.join(falsk, "feilmelding"), UTLØPT_INNLOGGING.replace("objects.list", "cp"));
     const r = kjør([rot, "a.md"]);
     expect(r.kode).toBe(3);
+    expect(r.ut).toContain("kjør `gcloud auth login`, eller velg riktig konto med `gcloud config set account`");
+    expect(r.ut).not.toContain("to select an already authenticated account");
+  });
+  test("--fjern med utløpt innlogging ber om gcloud auth login", () => {
+    writeFileSync(path.join(falsk, "feil"), "gs://felles-test/a.md\n");
+    writeFileSync(path.join(falsk, "feilmelding"), UTLØPT_INNLOGGING.replace("objects.list", "rm"));
+    const r = kjør(["--fjern", "--ja", "a.md"]);
+    expect(r.kode).toBe(3);
     expect(r.ut).toContain("kjør `gcloud auth login`");
     expect(r.ut).not.toContain("to select an already authenticated account");
+  });
+  test("en feil som nevner auth uten gcloud sin innloggingsinstruks vises som før", () => {
+    skriv("a.md", "# A\n");
+    writeFileSync(path.join(falsk, "feil"), "gs://felles-test/a.md\n");
+    writeFileSync(path.join(falsk, "feilmelding"), "ERROR: (gcloud.storage.cp) OAuth transport error: run gcloud auth list to check\nHTTPError 503: author service unavailable\n");
+    const r = kjør([rot, "a.md"]);
+    expect(r.kode).toBe(3);
+    expect(r.ut).toContain("HTTPError 503: author service unavailable");
+    expect(r.ut).not.toContain("gcloud auth login");
   });
 });
 
