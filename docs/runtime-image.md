@@ -19,8 +19,8 @@ the embedding model depends on it.
 
 | Stage | Image | What it has |
 |---|---|---|
-| build | `dhi-bun:1.4.2-debian13-dev` | Shell, package manager, root. Runs `bun install` and bakes the model. |
-| runtime | `dhi-bun:1.4.2-debian13` | Bun, CA certificates, coreutils, `openssl`, and the `debconf`/`dpkg-reconfigure` helpers. No shell, no apt, user 65532. |
+| build | `dhi-bun:1.4.2-debian13.7-dev` | Shell, package manager, root. Runs `bun install` and bakes the model. |
+| runtime | `dhi-bun:1.4.2-debian13.7` | Bun, CA certificates, coreutils, `openssl`, and the `debconf`/`dpkg-reconfigure` helpers. No shell, no apt, user 65532. |
 
 Both come from the same DHI release, so the native modules installed in the
 build stage load in the runtime stage.
