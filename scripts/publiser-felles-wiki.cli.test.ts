@@ -48,7 +48,7 @@ d="$FAKE_GCLOUD_DIR"
 n=$(( $(cat "$d/n" 2>/dev/null || echo 0) + 1 )); echo $n > "$d/n"
 printf '%s\\n' "$@" > "$d/kall-$n.args"
 if [ "$1 $2 $3" = "storage objects list" ]; then
-  if [ -f "$d/liste-feil" ]; then echo "falsk listefeil" >&2; exit 1; fi
+  if [ -f "$d/liste-feil" ]; then if [ -f "$d/feilmelding" ]; then cat "$d/feilmelding" >&2; else echo "falsk listefeil" >&2; fi; exit 1; fi
   exec bun "$d/../liste.ts" "$d/liste.json" "$4" "$5"
 fi
 last="\${@: -1}"
@@ -256,6 +256,115 @@ describe("maskering av stier sluppet gjennom med --tillat-ident", () => {
     expect(r.kode).toBe(3);
     expect(r.ut).toContain("[feilmeldingen er skjult: inneholder NAVident]");
     expect(r.ut).not.toContain("Z991111");
+  });
+});
+
+// Teksten gcloud skrev da innloggingen gikk ut (2026-09-30); siste linje sier
+// ingenting om årsaken.
+const UTLØPT_INNLOGGING = `ERROR: (gcloud.storage.objects.list) There was a problem refreshing your current auth tokens: Reauthentication failed. cannot prompt during non-interactive execution.
+Please run:
+
+  $ gcloud auth login
+
+to obtain new credentials.
+
+If you have already logged in with a different account, run:
+
+  $ gcloud config set account ACCOUNT
+
+to select an already authenticated account to use.
+`;
+
+// De andre formene gcloud skriver (googlecloudsdk/core/credentials, exceptions.py
+// og store.py): ingen aktiv konto, manglende legitimasjon for kontoen (uten
+// config set account), og ADC, som ber om en annen kommando.
+const INGEN_AKTIV_KONTO = UTLØPT_INNLOGGING.replace("objects.list", "cp").replace(
+  "There was a problem refreshing your current auth tokens: Reauthentication failed. cannot prompt during non-interactive execution.",
+  "You do not currently have an active account selected.",
+);
+const MANGLER_LEGITIMASJON = `ERROR: (gcloud.storage.cp) Your current active account [kurator@example.com] does not have any valid credentials
+Please run:
+
+  $ gcloud auth login
+
+to obtain new credentials.
+
+For service account, please activate it first:
+
+  $ gcloud auth activate-service-account ACCOUNT
+`;
+const ADC = `ERROR: (gcloud.storage.cp) There was a problem refreshing your current auth tokens: invalid_grant
+Please run:
+
+  $ gcloud auth application-default login
+
+to obtain new credentials.
+`;
+const HINT = "gcloud ber om innlogging: kjør `gcloud auth login`, eller velg riktig konto med `gcloud config set account`, og prøv igjen";
+
+describe("utløpt gcloud-innlogging", () => {
+  test("en listefeil ber om gcloud auth login i stedet for å vise halen av meldingen", () => {
+    skriv("a.md", "# A\n");
+    writeFileSync(path.join(falsk, "liste-feil"), "");
+    writeFileSync(path.join(falsk, "feilmelding"), UTLØPT_INNLOGGING);
+    const r = kjør([rot, "a.md"]);
+    expect(r.kode).toBe(2);
+    expect(r.ut).toContain(HINT);
+    expect(r.ut).not.toContain("to select an already authenticated account");
+    expect(opplastinger()).toEqual([]);
+  });
+  test("en feilet opplasting med utløpt innlogging ber om gcloud auth login", () => {
+    skriv("a.md", "# A\n");
+    writeFileSync(path.join(falsk, "feil"), "gs://felles-test/a.md\n");
+    writeFileSync(path.join(falsk, "feilmelding"), UTLØPT_INNLOGGING.replace("objects.list", "cp"));
+    const r = kjør([rot, "a.md"]);
+    expect(r.kode).toBe(3);
+    expect(r.ut).toContain(HINT);
+    expect(r.ut).not.toContain("to select an already authenticated account");
+  });
+  test("--fjern med utløpt innlogging ber om gcloud auth login", () => {
+    writeFileSync(path.join(falsk, "feil"), "gs://felles-test/a.md\n");
+    writeFileSync(path.join(falsk, "feilmelding"), UTLØPT_INNLOGGING.replace("objects.list", "rm"));
+    const r = kjør(["--fjern", "--ja", "a.md"]);
+    expect(r.kode).toBe(3);
+    expect(r.ut).toContain(HINT);
+    expect(r.ut).not.toContain("to select an already authenticated account");
+  });
+  test("listefeilen viser hele hintet foran listefeilens egen forklaring", () => {
+    skriv("a.md", "# A\n");
+    writeFileSync(path.join(falsk, "liste-feil"), "");
+    writeFileSync(path.join(falsk, "feilmelding"), UTLØPT_INNLOGGING);
+    const r = kjør([rot, "a.md"]);
+    expect(r.ut).toContain(`feilet (exit 1): ${HINT} — uten objektlisten`);
+  });
+  test.each([
+    ["ingen aktiv konto", INGEN_AKTIV_KONTO],
+    ["manglende legitimasjon, uten config set account", MANGLER_LEGITIMASJON],
+  ])("%s gir samme hint", (_navn, melding) => {
+    skriv("a.md", "# A\n");
+    writeFileSync(path.join(falsk, "feil"), "gs://felles-test/a.md\n");
+    writeFileSync(path.join(falsk, "feilmelding"), melding);
+    const r = kjør([rot, "a.md"]);
+    expect(r.kode).toBe(3);
+    expect(r.ut).toContain(HINT);
+  });
+  test("ADC ber om en annen kommando og gir ikke hintet", () => {
+    skriv("a.md", "# A\n");
+    writeFileSync(path.join(falsk, "feil"), "gs://felles-test/a.md\n");
+    writeFileSync(path.join(falsk, "feilmelding"), ADC);
+    const r = kjør([rot, "a.md"]);
+    expect(r.kode).toBe(3);
+    expect(r.ut).not.toContain(HINT);
+    expect(r.ut).toContain("to obtain new credentials.");
+  });
+  test("en feil som nevner auth uten gcloud sin innloggingsinstruks vises som før", () => {
+    skriv("a.md", "# A\n");
+    writeFileSync(path.join(falsk, "feil"), "gs://felles-test/a.md\n");
+    writeFileSync(path.join(falsk, "feilmelding"), "ERROR: (gcloud.storage.cp) OAuth transport error: run gcloud auth list to check\nHTTPError 503: author service unavailable\n");
+    const r = kjør([rot, "a.md"]);
+    expect(r.kode).toBe(3);
+    expect(r.ut).toContain("HTTPError 503: author service unavailable");
+    expect(r.ut).not.toContain("gcloud auth login");
   });
 });
 

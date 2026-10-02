@@ -667,9 +667,13 @@ function listObjekter(bucket: string, o: Omgivelser): string[] | string {
 /**
  * Siste linje av gcloud sin feilmelding, uten objektnavn med funn: hvert
  * kjente navn byttes med sin maskerte visning, og har linjen fortsatt et funn,
- * skjules hele linjen.
+ * skjules hele linjen. Ber gcloud selv om `gcloud auth login`, er siste linje
+ * bare halen av forklaringen, så da sier vi det rett ut i stedet.
  */
 function maskerGcloud(stderr: string, navn: { objekt: string; visning: string }[]): string {
+  if (/\$ gcloud auth login/.test(stderr)) {
+    return "gcloud ber om innlogging: kjør `gcloud auth login`, eller velg riktig konto med `gcloud config set account`, og prøv igjen";
+  }
   let linje = stderr.trim().split("\n").at(-1) ?? "";
   for (const n of navn) {
     if (skannTekst(n.objekt).length === 0) continue;
