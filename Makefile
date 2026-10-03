@@ -1,27 +1,21 @@
-.PHONY: help deploy-q2 deploy-q2-sjekk ref-fra-kommandolinjen
+.PHONY: help deploy-q2 deploy-q2-sjekk
 
-# Hvor REF kan komme fra, og hva som skjer:
-#   ikke satt, eller tom i miljøet   tuppen av muninn main
-#   satt i miljøet                   deploy-målene avviser; `help` virker fortsatt
-#   kommandolinjen                   brukes. En REF i MAKEFLAGS teller også som
-#                                    kommandolinje, og make kan ikke skille dem.
-# Verdien går til skriptet gjennom miljøet, uekspandert og uten skall-sitering.
-MUNINN_DEPLOY_REF := $(value REF)
-export MUNINN_DEPLOY_REF
-REF_FRA_MILJOET := $(if $(filter environment%,$(origin REF)),$(if $(value REF),ja))
+# Målene tar ingen ref. make henter variabler fra miljøet, MAKEFLAGS og
+# MAKEFILES, og ekspanderer dem; ingen vakt her kan skille en ment REF fra en
+# glemt eksport. En REF med innhold, uansett kilde, stopper derfor all kjøring.
+# `$(value …)` ekspanderer ikke verdien.
+ifneq ($(value REF),)
+$(error make-målene deployer alltid tuppen av muninn main og tar ingen REF. For en bestemt ref: scripts/deploy-q2.sh <tag|sha>. Er REF eksportert fra annet arbeid: unset REF)
+endif
 
 help:
-	@echo "make deploy-q2 [REF=<tag|sha>]        deployer muninn til q2; standard er tuppen av muninn main"
-	@echo "make deploy-q2-sjekk [REF=<tag|sha>]  bare forhåndssjekkene, starter ingen workflow"
+	@echo "make deploy-q2        deployer tuppen av muninn main til q2"
+	@echo "make deploy-q2-sjekk  bare forhåndssjekkene, starter ingen workflow"
+	@echo "scripts/deploy-q2.sh <tag|sha>            deployer en bestemt ref"
+	@echo "DRY_RUN=1 scripts/deploy-q2.sh <tag|sha>  sjekker en bestemt ref"
 
-ref-fra-kommandolinjen:
-	@if [ -n "$(REF_FRA_MILJOET)" ]; then \
-	  echo "REF er satt i miljøet. Oppgi den på kommandolinjen (make deploy-q2 REF=…), eller kjør 'unset REF' for tuppen av muninn main" >&2; \
-	  exit 1; \
-	fi
-
-deploy-q2: ref-fra-kommandolinjen
+deploy-q2:
 	@scripts/deploy-q2.sh
 
-deploy-q2-sjekk: ref-fra-kommandolinjen
+deploy-q2-sjekk:
 	@DRY_RUN=1 scripts/deploy-q2.sh

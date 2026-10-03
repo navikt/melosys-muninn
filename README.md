@@ -121,10 +121,12 @@ immediately, and that SHA is what the GAR tag (`muninn-<sha>`) and the pod's
 today, so the first deploy will name a SHA.
 
 From a laptop, `make deploy-q2` does the whole round: it resolves muninn
-`main` to a SHA (or takes `REF=<tag|sha>`), checks the upstream pin before
-dispatching, watches the run and then checks that the pod's `MUNINN_REF` is
-that SHA and `/api/live` answers 200. `make deploy-q2-sjekk` runs only the
-checks. It needs `gh`, `jq`, `kubectl` on context `dev-gcp` and naisdevice.
+`main` to a SHA, checks the upstream pin before dispatching, watches the run
+and then checks that the deployment's `MUNINN_REF` is that SHA and
+`/api/live` answers 200. `make deploy-q2-sjekk` runs only the checks. To
+deploy a specific tag or SHA, run `scripts/deploy-q2.sh <tag|sha>` (prefix
+`DRY_RUN=1` to check only); the make targets take no ref. It needs `gh`, `jq`,
+`kubectl` on context `dev-gcp` and naisdevice.
 
 Before the first deploy, work through **`docs/PREREQUISITES.md`**. §1–§10 are
 ten items and each one alone makes the pod useless; §0 is not one of them, it

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Deployer melosys-muninn til q2 (dev-gcp) fra laptopen: `make deploy-q2`.
+# Deployer melosys-muninn til q2 (dev-gcp) fra laptopen. `make deploy-q2` kjører
+# skriptet uten argument; en bestemt ref gis bare som argument, aldri via miljøet.
 #
 #   scripts/deploy-q2.sh [<muninn-ref>]     ref: tag eller full commit-SHA; standard er tuppen av muninn main
 #   DRY_RUN=1 scripts/deploy-q2.sh          stopp etter forhåndssjekkene, uten å starte workflowen
-#   MUNINN_DEPLOY_REF=<ref>                  ref-en når argumentet mangler; slik sender Makefile den
 #
 # Skriptet erstatter ingen av vaktene i deploy.yml. Det løser ref-en til en SHA
 # (workflowen tar aldri en gren), sjekker upstream-pinnen før en kjøring på fem
 # minutter feiler på den, starter workflowen, venter på den og sjekker til slutt
-# at poden kjører den SHA-en.
+# at deployment-en bærer den SHA-en.
 #
 # Workflowen kjører fra main i deploy-repoet, så alt skriptet leser fra dette
 # repoet (deploy.yml, vars-q2.json, pinnen) hentes derfra, ikke fra arbeidskopien.
@@ -48,7 +48,7 @@ INGRESS=$(printf '%s' "$VARS" | jq -er '.ingress_intern')
 
 # Samme regel som steget «The ref must be a tag or a full commit SHA, never a
 # branch» i deploy.yml: en full SHA, eller en tag som finnes upstream.
-REF=${1:-${MUNINN_DEPLOY_REF:-}}
+REF=${1:-}
 REFS=$(git ls-remote --refs "https://github.com/$MUNINN_REPO") || fail "klarte ikke å hente ref-er fra $MUNINN_REPO"
 has_ref() { printf '%s\n' "$REFS" | w="$1" awk 'BEGIN{w=ENVIRON["w"]} $2==w{f=1} END{exit !f}'; }
 if [ -z "$REF" ]; then
@@ -92,10 +92,10 @@ deployed_ref() {
 }
 BEFORE=$(deployed_ref 2>/dev/null) || {
   BEFORE=
-  echo "  NB: fikk ikke lest MUNINN_REF fra poden (svarer ikke klyngen, er naisdevice av, eller finnes ikke deployen ennå?)"
+  echo "  NB: fikk ikke lest MUNINN_REF fra deployment-en (svarer ikke klyngen, er naisdevice av, eller finnes ikke deployen ennå?)"
 }
 if [ "$BEFORE" = "$SHA" ]; then
-  echo "  NB: poden kjører allerede $SHA — sluttsjekken viser da ikke at denne kjøringen gikk gjennom, bare workflowen gjør det"
+  echo "  NB: deployment-en kjører allerede $SHA — sluttsjekken viser da ikke at denne kjøringen gikk gjennom, bare workflowen gjør det"
 fi
 
 if [ "${DRY_RUN:-}" = 1 ]; then
@@ -110,14 +110,14 @@ RUN_URL=$(printf '%s\n' "$OUT" | grep -Eo 'https://github\.com/[^ ]+/actions/run
 # Workflowen ER startet her. Ikke kjør skriptet på nytt: det gir to deployer som kappes.
 [ -n "$RUN_URL" ] || fail "workflowen er trolig startet, men gh oppga ingen kjørings-URL. Ikke start på nytt — følg den med: gh run list -R $DEPLOY_REPO --workflow deploy.yml"
 echo "kjøring: $RUN_URL"
-echo "venter på kjøringen (vanligvis rundt 5 minutter)"
+echo "venter på kjøringen"
 gh run watch "${RUN_URL##*/}" -R "$DEPLOY_REPO" --exit-status --interval 30 > /dev/null || fail "workflowen feilet: $RUN_URL"
 echo "workflowen er grønn"
 
 # nais/deploy venter selv på utrullingen, så en grønn kjøring er en ferdig utrulling.
-DEPLOYED=$(deployed_ref) || fail "workflowen er grønn ($RUN_URL), men MUNINN_REF fra poden kunne ikke leses. Ikke start på nytt; sjekk med kubectl når klyngen svarer"
-[ "$DEPLOYED" = "$SHA" ] || fail "poden har MUNINN_REF=$DEPLOYED, forventet $SHA"
-echo "poden kjører muninn $SHA"
+DEPLOYED=$(deployed_ref) || fail "workflowen er grønn ($RUN_URL), men MUNINN_REF fra deployment-en kunne ikke leses. Ikke start på nytt; sjekk med kubectl når klyngen svarer"
+[ "$DEPLOYED" = "$SHA" ] || fail "workflowen er grønn ($RUN_URL), men deployment-en har MUNINN_REF=$DEPLOYED, forventet $SHA. Kjørte en annen deploy samtidig? Ikke start på nytt før du har sjekket"
+echo "deployment-en kjører muninn $SHA"
 LIVE=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$INGRESS/api/live") || true
 [ "$LIVE" = 200 ] || fail "workflowen er grønn ($RUN_URL), men $INGRESS/api/live svarte '$LIVE' (naisdevice på?)"
 echo "$INGRESS/api/live: 200"
