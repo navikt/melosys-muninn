@@ -4,79 +4,108 @@
 #   scripts/deploy-q2.sh [<muninn-ref>]     ref: tag eller full commit-SHA; standard er tuppen av muninn main
 #   DRY_RUN=1 scripts/deploy-q2.sh          stopp etter forhåndssjekkene, uten å starte workflowen
 #
-# Skriptet erstatter ingen av vaktene i deploy.yml. Det løser main til en SHA
+# Skriptet erstatter ingen av vaktene i deploy.yml. Det løser ref-en til en SHA
 # (workflowen tar aldri en gren), sjekker upstream-pinnen før en kjøring på fem
 # minutter feiler på den, starter workflowen, venter på den og sjekker til slutt
-# at poden kjører den SHA-en som ble sendt inn.
+# at poden kjører den SHA-en.
 #
-# Krever: gh (innlogget), jq, shasum, kubectl med kontekst dev-gcp og naisdevice
-# for sluttsjekken mot ingressen.
+# Workflowen kjører fra main i deploy-repoet, så alt skriptet leser fra dette
+# repoet (deploy.yml, vars-q2.json, pinnen) hentes derfra, ikke fra arbeidskopien.
+#
+# Krever: gh (innlogget), git, jq, shasum, kubectl med kontekst dev-gcp og
+# naisdevice for sluttsjekken mot ingressen.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DEPLOY_REPO=navikt/melosys-muninn
 CONTEXT=dev-gcp
 
-# Samme kilde som workflowen, så det ikke finnes en kopi å holde i takt.
-MUNINN_REPO=$(awk '$1 == "MUNINN_REPO:" {print $2; exit}' "$ROOT/.github/workflows/deploy.yml")
-[ -n "$MUNINN_REPO" ] || { echo "fant ikke MUNINN_REPO i deploy.yml" >&2; exit 1; }
-APP=$(jq -er '.app_name' "$ROOT/nais/vars-q2.json")
-NAMESPACE=$(jq -er '.namespace' "$ROOT/nais/vars-q2.json")
-INGRESS=$(jq -er '.ingress_intern' "$ROOT/nais/vars-q2.json")
+fail() { echo "$*" >&2; exit 1; }
+# Én fil fra et repo på en gitt ref, rått innhold.
+raw() {
+  gh api -H 'Accept: application/vnd.github.raw' "repos/$1/contents/$2?ref=$3"
+}
 
-REF=${1:-}
-if [ -z "$REF" ]; then
-  REF=$(git ls-remote "https://github.com/$MUNINN_REPO" refs/heads/main | awk '{print $1}') || true
-  [ -n "$REF" ] || { echo "klarte ikke å løse $MUNINN_REPO main til en SHA" >&2; exit 1; }
-  echo "muninn-ref: $REF (tuppen av $MUNINN_REPO main)"
-else
-  echo "muninn-ref: $REF"
-fi
-
-# Workflowen kjører alltid fra main i deploy-repoet, ikke fra det som ligger lokalt.
-DEPLOY_SHA=$(gh api "repos/$DEPLOY_REPO/commits/main" --jq .sha)
+DEPLOY_SHA=$(gh api "repos/$DEPLOY_REPO/commits/main" --jq .sha) || fail "klarte ikke å lese $DEPLOY_REPO main"
 echo "deploy-repo: $DEPLOY_REPO main @ ${DEPLOY_SHA:0:7}"
 if [ "$(git -C "$ROOT" rev-parse HEAD)" != "$DEPLOY_SHA" ]; then
   echo "  NB: lokal HEAD er ikke $DEPLOY_REPO main — lokale endringer er ikke med i denne deployen"
 fi
 
+DEPLOY_YML=$(raw "$DEPLOY_REPO" .github/workflows/deploy.yml "$DEPLOY_SHA") || fail "klarte ikke å lese deploy.yml fra $DEPLOY_REPO main"
+VARS=$(raw "$DEPLOY_REPO" nais/vars-q2.json "$DEPLOY_SHA") || fail "klarte ikke å lese nais/vars-q2.json fra $DEPLOY_REPO main"
+PIN=$(raw "$DEPLOY_REPO" build/upstream-dockerfile-pin.txt "$DEPLOY_SHA") || fail "klarte ikke å lese pinnen fra $DEPLOY_REPO main"
+MUNINN_REPO=$(printf '%s\n' "$DEPLOY_YML" | awk '$1 == "MUNINN_REPO:" {print $2; exit}')
+[ -n "$MUNINN_REPO" ] || fail "fant ikke MUNINN_REPO i deploy.yml"
+APP=$(printf '%s' "$VARS" | jq -er '.app_name')
+NAMESPACE=$(printf '%s' "$VARS" | jq -er '.namespace')
+INGRESS=$(printf '%s' "$VARS" | jq -er '.ingress_intern')
+
+# Samme regel som steget «The ref must be a tag or a full commit SHA, never a
+# branch» i deploy.yml: en full SHA, eller en tag som finnes upstream.
+REF=${1:-}
+REFS=$(git ls-remote --refs "https://github.com/$MUNINN_REPO") || fail "klarte ikke å hente ref-er fra $MUNINN_REPO"
+has_ref() { printf '%s\n' "$REFS" | w="$1" awk 'BEGIN{w=ENVIRON["w"]} $2==w{f=1} END{exit !f}'; }
+if [ -z "$REF" ]; then
+  REF=$(printf '%s\n' "$REFS" | awk '$2 == "refs/heads/main" {print $1}')
+  [ -n "$REF" ] || fail "fant ikke main i $MUNINN_REPO"
+  echo "muninn-ref: $REF (tuppen av $MUNINN_REPO main)"
+elif has_ref "refs/heads/$REF"; then
+  fail "'$REF' er en GREN i $MUNINN_REPO — oppgi en tag eller en full commit-SHA"
+elif printf %s "$REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+  echo "muninn-ref: $REF"
+elif has_ref "refs/tags/$REF"; then
+  echo "muninn-ref: tag $REF"
+else
+  fail "'$REF' er verken en tag i $MUNINN_REPO eller en full commit-SHA på 40 tegn"
+fi
+
+# Løst én gang: workflowen og sluttsjekken får samme SHA, også om en tag flyttes.
+SHA=$(gh api "repos/$MUNINN_REPO/commits/$(jq -rn --arg r "$REF" '$r|@uri')" --jq .sha) \
+  || fail "fant ingen commit for '$REF' i $MUNINN_REPO"
+[ "$SHA" = "$REF" ] || echo "  løst til $SHA"
+
 # Samme sammenligning som steget «build/Dockerfile.nais still mirrors upstream's
 # build and entrypoint» i deploy.yml. Den sjekken er fortsatt den som avgjør;
 # denne sparer bare en kjøring som uansett ville feilet.
-raw() {
-  gh api -H 'Accept: application/vnd.github.raw' "repos/$MUNINN_REPO/contents/$1?ref=$REF"
-}
-DF=$(raw Dockerfile | shasum -a 256) || { echo "fant ikke Dockerfile i $MUNINN_REPO@$REF" >&2; exit 1; }
-EP=$(raw scripts/docker-entrypoint.sh | shasum -a 256) || { echo "fant ikke scripts/docker-entrypoint.sh i $MUNINN_REPO@$REF" >&2; exit 1; }
-START=$(raw package.json | jq -er '.scripts.start') || { echo "package.json i $MUNINN_REPO@$REF har ingen scripts.start" >&2; exit 1; }
+DF=$(raw "$MUNINN_REPO" Dockerfile "$SHA" | shasum -a 256) || fail "fant ikke Dockerfile i $MUNINN_REPO@$SHA"
+EP=$(raw "$MUNINN_REPO" scripts/docker-entrypoint.sh "$SHA" | shasum -a 256) || fail "fant ikke scripts/docker-entrypoint.sh i $MUNINN_REPO@$SHA"
+START=$(raw "$MUNINN_REPO" package.json "$SHA" | jq -er '.scripts.start') || fail "package.json i $MUNINN_REPO@$SHA har ingen scripts.start"
 if ! printf 'sha256 Dockerfile %s\nsha256 scripts/docker-entrypoint.sh %s\nscripts.start %s\n' "${DF%% *}" "${EP%% *}" "$START" \
-    | diff -u "$ROOT/build/upstream-dockerfile-pin.txt" -; then
-  echo "upstream-pinnen stemmer ikke: speil endringen i build/Dockerfile.nais eller build/nais-entrypoint.ts og pin på nytt (docs/runtime-image.md)" >&2
-  exit 1
+    | diff -u <(printf '%s\n' "$PIN") -; then
+  fail "upstream-pinnen stemmer ikke: speil endringen i build/Dockerfile.nais eller build/nais-entrypoint.ts og pin på nytt (docs/runtime-image.md)"
 fi
 echo "upstream-pinnen stemmer"
+
+deployed_ref() {
+  kubectl --context "$CONTEXT" -n "$NAMESPACE" get "deploy/$APP" \
+    -o jsonpath="{.spec.template.spec.containers[?(@.name==\"$APP\")].env[?(@.name==\"MUNINN_REF\")].value}"
+}
+BEFORE=$(deployed_ref 2>/dev/null) || BEFORE=
+if [ "$BEFORE" = "$SHA" ]; then
+  echo "  NB: poden kjører allerede $SHA — sluttsjekken viser da ikke at denne kjøringen gikk gjennom, bare workflowen gjør det"
+fi
 
 if [ "${DRY_RUN:-}" = 1 ]; then
   echo "DRY_RUN=1: starter ikke workflowen"
   exit 0
 fi
 
-OUT=$(gh workflow run deploy.yml -R "$DEPLOY_REPO" --ref main -f muninn_ref="$REF" -f cluster="$CONTEXT" 2>&1)
-RUN_URL=$(printf '%s\n' "$OUT" | grep -Eo 'https://github\.com/[^ ]+/actions/runs/[0-9]+' | head -1) || true
-[ -n "$RUN_URL" ] || { printf 'fant ingen kjørings-URL i svaret fra gh:\n%s\n' "$OUT" >&2; exit 1; }
-echo "kjøring: $RUN_URL"
-gh run watch "${RUN_URL##*/}" -R "$DEPLOY_REPO" --exit-status --interval 30 > /dev/null || {
-  echo "workflowen feilet: $RUN_URL" >&2; exit 1
+OUT=$(gh workflow run deploy.yml -R "$DEPLOY_REPO" --ref main -f muninn_ref="$SHA" -f cluster="$CONTEXT" 2>&1) || {
+  printf '%s\n' "$OUT" >&2; fail "klarte ikke å starte workflowen"
 }
+RUN_URL=$(printf '%s\n' "$OUT" | grep -Eo 'https://github\.com/[^ ]+/actions/runs/[0-9]+' | head -1) || true
+# Workflowen ER startet her. Ikke kjør skriptet på nytt: det gir to deployer som kappes.
+[ -n "$RUN_URL" ] || fail "workflowen er trolig startet, men gh oppga ingen kjørings-URL. Ikke start på nytt — følg den med: gh run list -R $DEPLOY_REPO --workflow deploy.yml"
+echo "kjøring: $RUN_URL"
+echo "venter på kjøringen (vanligvis rundt 5 minutter)"
+gh run watch "${RUN_URL##*/}" -R "$DEPLOY_REPO" --exit-status --interval 30 > /dev/null || fail "workflowen feilet: $RUN_URL"
 echo "workflowen er grønn"
 
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status "deploy/$APP" --timeout=180s
-DEPLOYED=$(kubectl --context "$CONTEXT" -n "$NAMESPACE" get "deploy/$APP" \
-  -o jsonpath="{.spec.template.spec.containers[?(@.name==\"$APP\")].env[?(@.name==\"MUNINN_REF\")].value}")
-# Poden bærer alltid den løste SHA-en, også når en tag ble sendt inn.
-WANT=$(gh api "repos/$MUNINN_REPO/commits/$REF" --jq .sha)
-[ "$DEPLOYED" = "$WANT" ] || { echo "poden har MUNINN_REF=$DEPLOYED, forventet $WANT" >&2; exit 1; }
-echo "poden kjører muninn $WANT"
+DEPLOYED=$(deployed_ref)
+[ "$DEPLOYED" = "$SHA" ] || fail "poden har MUNINN_REF=$DEPLOYED, forventet $SHA"
+echo "poden kjører muninn $SHA"
 LIVE=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$INGRESS/api/live") || true
-[ "$LIVE" = 200 ] || { echo "$INGRESS/api/live svarte '$LIVE' (naisdevice på?)" >&2; exit 1; }
+[ "$LIVE" = 200 ] || fail "$INGRESS/api/live svarte '$LIVE' (naisdevice på?)"
 echo "$INGRESS/api/live: 200"
