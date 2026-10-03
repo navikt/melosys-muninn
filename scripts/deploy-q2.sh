@@ -34,7 +34,11 @@ fi
 
 DEPLOY_YML=$(raw "$DEPLOY_REPO" .github/workflows/deploy.yml "$DEPLOY_SHA") || fail "klarte ikke å lese deploy.yml fra $DEPLOY_REPO main"
 VARS=$(raw "$DEPLOY_REPO" nais/vars-q2.json "$DEPLOY_SHA") || fail "klarte ikke å lese nais/vars-q2.json fra $DEPLOY_REPO main"
-PIN=$(raw "$DEPLOY_REPO" build/upstream-dockerfile-pin.txt "$DEPLOY_SHA") || fail "klarte ikke å lese pinnen fra $DEPLOY_REPO main"
+# Til fil, ikke `$(…)`: kommandoerstatning stryker avsluttende linjeskift, og
+# workflowen sammenligner filen byte for byte.
+PIN=$(mktemp)
+trap 'rm -f "$PIN"' EXIT
+raw "$DEPLOY_REPO" build/upstream-dockerfile-pin.txt "$DEPLOY_SHA" > "$PIN" || fail "klarte ikke å lese pinnen fra $DEPLOY_REPO main"
 MUNINN_REPO=$(printf '%s\n' "$DEPLOY_YML" | awk '$1 == "MUNINN_REPO:" {print $2; exit}')
 [ -n "$MUNINN_REPO" ] || fail "fant ikke MUNINN_REPO i deploy.yml"
 APP=$(printf '%s' "$VARS" | jq -er '.app_name')
@@ -52,7 +56,7 @@ if [ -z "$REF" ]; then
   echo "muninn-ref: $REF (tuppen av $MUNINN_REPO main)"
 elif has_ref "refs/heads/$REF"; then
   fail "'$REF' er en GREN i $MUNINN_REPO — oppgi en tag eller en full commit-SHA"
-elif printf %s "$REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+elif printf %s "$REF" | jq -Rse 'test("\\A[0-9a-fA-F]{40}\\z")' > /dev/null; then
   echo "muninn-ref: $REF"
 elif has_ref "refs/tags/$REF"; then
   echo "muninn-ref: tag $REF"
@@ -72,16 +76,22 @@ DF=$(raw "$MUNINN_REPO" Dockerfile "$SHA" | shasum -a 256) || fail "fant ikke Do
 EP=$(raw "$MUNINN_REPO" scripts/docker-entrypoint.sh "$SHA" | shasum -a 256) || fail "fant ikke scripts/docker-entrypoint.sh i $MUNINN_REPO@$SHA"
 START=$(raw "$MUNINN_REPO" package.json "$SHA" | jq -er '.scripts.start') || fail "package.json i $MUNINN_REPO@$SHA har ingen scripts.start"
 if ! printf 'sha256 Dockerfile %s\nsha256 scripts/docker-entrypoint.sh %s\nscripts.start %s\n' "${DF%% *}" "${EP%% *}" "$START" \
-    | diff -u <(printf '%s\n' "$PIN") -; then
+    | diff -u "$PIN" -; then
   fail "upstream-pinnen stemmer ikke: speil endringen i build/Dockerfile.nais eller build/nais-entrypoint.ts og pin på nytt (docs/runtime-image.md)"
 fi
 echo "upstream-pinnen stemmer"
 
+# `get --raw` gjør ett kall uten API-oppdagelse, så en utilgjengelig klynge
+# feiler etter 10 sekunder. `get deploy/…` brukte 44 med samme tidsavbrudd.
 deployed_ref() {
-  kubectl --context "$CONTEXT" -n "$NAMESPACE" get "deploy/$APP" \
-    -o jsonpath="{.spec.template.spec.containers[?(@.name==\"$APP\")].env[?(@.name==\"MUNINN_REF\")].value}"
+  kubectl --context "$CONTEXT" --request-timeout=10s \
+    get --raw "/apis/apps/v1/namespaces/$NAMESPACE/deployments/$APP" \
+    | APP="$APP" jq -er '.spec.template.spec.containers[] | select(.name == env.APP) | .env[] | select(.name == "MUNINN_REF") | .value'
 }
-BEFORE=$(deployed_ref 2>/dev/null) || BEFORE=
+BEFORE=$(deployed_ref 2>/dev/null) || {
+  BEFORE=
+  echo "  NB: fikk ikke lest MUNINN_REF fra poden (naisdevice og kubectl-innlogging på?) — sluttsjekken trenger begge"
+}
 if [ "$BEFORE" = "$SHA" ]; then
   echo "  NB: poden kjører allerede $SHA — sluttsjekken viser da ikke at denne kjøringen gikk gjennom, bare workflowen gjør det"
 fi
@@ -103,7 +113,7 @@ gh run watch "${RUN_URL##*/}" -R "$DEPLOY_REPO" --exit-status --interval 30 > /d
 echo "workflowen er grønn"
 
 kubectl --context "$CONTEXT" -n "$NAMESPACE" rollout status "deploy/$APP" --timeout=180s
-DEPLOYED=$(deployed_ref)
+DEPLOYED=$(deployed_ref) || fail "fikk ikke lest MUNINN_REF fra poden etter deployen"
 [ "$DEPLOYED" = "$SHA" ] || fail "poden har MUNINN_REF=$DEPLOYED, forventet $SHA"
 echo "poden kjører muninn $SHA"
 LIVE=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$INGRESS/api/live") || true
