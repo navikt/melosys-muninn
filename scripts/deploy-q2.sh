@@ -4,10 +4,11 @@
 #
 #   scripts/deploy-q2.sh [<muninn-ref>]     ref: tag eller full commit-SHA; standard er tuppen av muninn main
 #   DRY_RUN=1 scripts/deploy-q2.sh          stopp etter forhåndssjekkene, uten å starte workflowen
+#                                            (alle verdier unntatt tom og 0 regnes som tørrkjøring)
 #
 # Skriptet erstatter ingen av vaktene i deploy.yml. Det løser ref-en til en SHA
-# (workflowen tar aldri en gren), sjekker upstream-pinnen før en kjøring på fem
-# minutter feiler på den, starter workflowen, venter på den og sjekker til slutt
+# (workflowen tar aldri en gren), sjekker upstream-pinnen før en hel
+# workflow-kjøring feiler på den, starter workflowen, venter på den og sjekker til slutt
 # at deployment-en bærer den SHA-en.
 #
 # Workflowen kjører fra main i deploy-repoet, så alt skriptet leser fra dette
@@ -98,8 +99,9 @@ if [ "$BEFORE" = "$SHA" ]; then
   echo "  NB: deployment-en kjører allerede $SHA — sluttsjekken viser da ikke at denne kjøringen gikk gjennom, bare workflowen gjør det"
 fi
 
-if [ "${DRY_RUN:-}" = 1 ]; then
-  echo "DRY_RUN=1: starter ikke workflowen"
+# Alt annet enn tom og 0: den som skriver DRY_RUN=true, mener en tørrkjøring.
+if [ -n "${DRY_RUN:-}" ] && [ "$DRY_RUN" != 0 ]; then
+  echo "DRY_RUN=$DRY_RUN: starter ikke workflowen"
   exit 0
 fi
 
