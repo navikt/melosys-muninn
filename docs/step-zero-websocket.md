@@ -28,13 +28,13 @@ that has surprised people before.
 
 Step zero is first but it is **not free**. Proving the upgrade *through the
 sidecar* requires §1–§4 of `PREREQUISITES.md` already in place — the app
-registration, admin consent, the group and **both** ingresses — because `autoLogin`
+registration, admin consent, the group and the ingress — because `autoLogin`
 refuses an unauthenticated upgrade **at the sidecar**, and it never reaches the
 app at all. The harness measured exactly that locally.
 
 So the sequence is:
 
-1. Buy §1–§4 (app registration + consent + group + the two ingresses).
+1. Buy §1–§4 (app registration + consent + group + the ingress).
 2. Deploy a **stub** `Application` — same `app_name`, same `azure` block, same
    sidecar settings and ingresses — by dispatching `.github/workflows/step-zero.yml`,
    which is **outside** the placeholder-guarded deploy workflow.

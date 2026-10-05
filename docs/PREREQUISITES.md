@@ -69,7 +69,7 @@ behaviour locally — a WS upgrade does arrive carrying `Authorization: Bearer`,
 and the session cookie is `SameSite=Lax`. The ingress is the untested half.
 
 **Everything step zero needs is in this repo**: `build/echo/` (the WebSocket
-echo image), `nais/step-zero/` (the stub `Application` and its own seven-value
+echo image), `nais/step-zero/` (the stub `Application` and its own six-value
 vars file) and `.github/workflows/step-zero.yml`, which builds the image,
 pushes it and applies the stub in one `workflow_dispatch`. Fill
 `vars-step-zero.json` and dispatch it. There is deliberately **no by-hand
