@@ -7,10 +7,11 @@
 # tables — the ownership failure the whole exercise avoids), so it gets no
 # such policy and its connection times out at the TCP layer.
 #
-# This grants the job the same one egress the app already has. Delete it with
+# This grants the job the same egress the app already has. Delete it with
 # the job; it references an instance IP and must not outlive it. Copy the IP
 # from the generated policy: `kubectl get networkpolicy -n teammelosys
-# sql-melosys-muninn-melosys-muninn -o yaml`.
+# sql-melosys-muninn-melosys-muninn -o yaml`. Copy every ipBlock it lists; prod
+# listed two on 2026-10-05.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

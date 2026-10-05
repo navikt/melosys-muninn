@@ -185,6 +185,16 @@ spec:
             cidr: <read it from the app's own sql-<instance>-<app> policy>
 ```
 
+Copy EVERY `ipBlock` the generated policy lists: the prod instance's policy
+named two addresses on 2026-10-05 (the private IP the job connected on, and a
+public one), where the dev instance's named one.
+
+After a successful `--yes`, the app's crash-looping pod starts by itself on its
+next retry, within five minutes. A team member cannot hurry it:
+`kubectl rollout restart` needs `patch` on deployments, which the team lacks
+(measured in prod 2026-10-05); `kubectl wait --for=condition=ready pod -l
+app=<app>` shows when it is up.
+
 Read the CIDR from the generated policy rather than from `gcloud`, so it cannot
 drift from what the app itself is allowed to reach. Delete the policy with the
 job — it names an instance IP and must not outlive it.

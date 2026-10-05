@@ -300,6 +300,14 @@ Three things about that are load-bearing:
   ordinary answer, with nothing in the trace saying why it stopped. That is why
   acceptance asserts a *whole* answer rather than "a reply arrived".
 
+**The Vertex AI API must be enabled in `gcp_project`**, once per project:
+`gcloud services enable aiplatform.googleapis.com --project <gcp_project>`.
+Name the project explicitly — gcloud's default project is often the dev one,
+where the API is already on, and the command then succeeds without changing
+prod. Without it the pod boots and serves `/chat`, and the first turn answers
+`PERMISSION_DENIED` with a link to the API page (measured in prod 2026-10-05).
+It takes a few minutes to propagate; no pod restart is needed.
+
 What is still open, and it is procurement rather than engineering:
 
 1. **Which GCP project owns the Vertex quota**, and is pay-as-you-go enough?
