@@ -1,4 +1,4 @@
-# One-shot schema provisioning for melosys-muninn-q2 — see docs/db-setup.md.
+# One-shot schema provisioning for melosys-muninn — see docs/db-setup.md.
 #
 # WHY THIS EXISTS AND `kubectl debug` DOES NOT. Measured 2026-09-12 in
 # teammelosys/dev-gcp: a team member may NOT create pods, pods/exec or jobs,
@@ -20,10 +20,14 @@
 #
 # Apply nais/provision-netpol.yaml alongside it, or the connection dies as
 # CONNECT_TIMEOUT with no firewall in sight. Delete both when finished.
+#
+# The sqeletor secret's suffix is generated per instance and differs between
+# clusters: read it with `kubectl get secret -n teammelosys | grep sqeletor-melosys-muninn`
+# and fill the REPLACE_ME below before applying.
 apiVersion: nais.io/v1
 kind: Naisjob
 metadata:
-  name: melosys-muninn-q2-provision
+  name: melosys-muninn-provision
   namespace: teammelosys
   labels:
     team: teammelosys
@@ -36,9 +40,9 @@ spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 3600
   envFrom:
-    - secret: google-sql-melosys-muninn-q2
+    - secret: google-sql-melosys-muninn
   filesFrom:
-    - secret: sqeletor-melosys-muninn-q2-adf6ac08
+    - secret: sqeletor-melosys-muninn-REPLACE_ME
       mountPath: /var/run/secrets/nais.io/sqlcertificate
   resources:
     limits:

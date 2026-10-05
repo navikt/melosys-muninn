@@ -1,14 +1,14 @@
 {
-  "_comment": "Step zero only — see docs/step-zero-websocket.md. A genuine SUBSET of vars-q2.json: the SEVEN values the stub needs, and nothing procurement-gated. Deliberately a separate file rather than reusing vars-q2.json, because that one still carries REPLACE_ME_gcp_project_id and REPLACE_ME_vertex_region at this point in the schedule, and there is no reason step zero should wait on a GCP project it does not dial. Fill all seven from the SAME source as vars-q2.json — they must be IDENTICAL in both files, or the stub proves the upgrade for a different app than the one that gets deployed. Nothing compares the two files for you.",
+  "_comment": "Step zero only — see docs/step-zero-websocket.md. A genuine SUBSET of vars.json: the SEVEN values the stub needs, and nothing procurement-gated. Deliberately a separate file rather than reusing vars.json, because that one still carries REPLACE_ME_gcp_project_id and REPLACE_ME_vertex_region at this point in the schedule, and there is no reason step zero should wait on a GCP project it does not dial. Fill all seven from the SAME source as vars.json — they must be IDENTICAL in both files, or the stub proves the upgrade for a different app than the one that gets deployed. Nothing compares the two files for you.",
 
   "_comment_image": "The echo image reference is NOT a value here. It is not knowable until .github/workflows/step-zero.yml has built and pushed it, and that workflow hands it to nais/deploy as `VAR: echo_image=<digest-pinned ref>`. It used to be a checked-in REPLACE_ME that no guard covered, and its failure — ImagePullBackOff — is the one build/echo/Dockerfile notes reads like a registry permission problem.",
 
-  "app_name": "melosys-muninn-q2",
+  "app_name": "melosys-muninn",
   "namespace": "teammelosys",
   "team": "teammelosys",
 
-  "ingress_intern": "https://melosys-muninn-q2.intern.dev.nav.no",
+  "ingress": "https://melosys-muninn.ansatt.nav.no",
 
-  "tenant": "trygdeetaten.no",
-  "group_muninn_bruker": "f5035189-0834-4ebb-b787-2608351f4843"
+  "tenant": "nav.no",
+  "group_muninn_bruker": "bdf0026f-251b-4a5e-86ea-bd7b24381abe"
 }

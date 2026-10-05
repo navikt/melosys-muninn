@@ -49,7 +49,7 @@ the read-only case above.
 
 | Form | Why it was wrong |
 |---|---|
-| `grep REPLACE_ME deploy/nais/vars-q2.json` | Also reads the file's own `_comment` keys, which say the token *while explaining it*. It refused a **correctly filled** vars file — forever. This shipped in the first commit of this repo and the deploy could never have run. |
+| `grep REPLACE_ME deploy/nais/vars.json` | Also reads the file's own `_comment` keys, which say the token *while explaining it*. It refused a **correctly filled** vars file — forever. This shipped in the first commit of this repo and the deploy could never have run. |
 
 A `jq` walk over non-`_` keys replaced it, and it names which values are still
 unfilled, which a grep cannot.

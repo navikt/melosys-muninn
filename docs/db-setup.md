@@ -30,19 +30,22 @@ that a superuser reset is required** — see the measurement below.
 
 ### Measured 2026-09-12: the app user creates the extension itself
 
-On `melosys-muninn-q2` in dev-gcp, the nais-provisioned application user is a
+On the dev deployment in dev-gcp, the nais-provisioned application user is a
 member of **`cloudsqlsuperuser`**:
 
 ```
-melosys-muninn-q2  -> member of cloudsqlsuperuser
+<app user>         -> member of cloudsqlsuperuser
 rune.lind@nav.no   -> member of cloudsqliamuser
 ```
+
+Not yet re-measured in prod-gcp. nais provisions the user the same way there,
+so expect the same, and let `--dry-run`'s output confirm it.
 
 `cloudsqlsuperuser` is the Cloud SQL role permitted to create extensions, so
 `db/provision.ts --yes` run as the app user applied all of `init.sql` —
 `CREATE EXTENSION vector` included — and finished `exit 0`. Verified after the
 fact, independently of the applier's own log: 33 base tables, **all 33 owned by
-`melosys-muninn-q2`**, `vector 0.8.5` installed, 71 rows in
+the app user**, `vector 0.8.5` installed, 71 rows in
 `schema_migrations`.
 
 Note which way round the privileges fall. A **personal** IAM identity is in
@@ -127,7 +130,7 @@ entrypoint's `DATABASE_URL` export:
 ```bash
 # a) a debug copy of the running pod, with the entrypoint replaced
 kubectl debug -n <namespace> <pod> --copy-to=muninn-schema \
-  --container=melosys-muninn-q2 --profile=general -- bun db/provision.ts --yes
+  --container=melosys-muninn --profile=general -- bun db/provision.ts --yes
 
 # b) a naisjob with its own `command:` — the same image, the same env
 ```

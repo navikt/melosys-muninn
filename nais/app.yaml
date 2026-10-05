@@ -88,15 +88,10 @@ spec:
 
   gcp:
     sqlInstances:
-      # NO `name:`. The instance then defaults to the APP name, which already
-      # carries the environment (`melosys-muninn-q2`) — the shape six of the
-      # team's eight sql-bearing apps use (skattehendelser-q2,
-      # faktureringskomponenten-q1/q2, melosys-trygdeavgift-beregning-q1 …).
-      #
-      # An earlier revision pinned `muninn-db`, which names no environment at
-      # all: a later prod or q1 deployment in the same project would want the
-      # same instance name. Renamed while the database was still empty, which
-      # is the only time it is free.
+      # NO `name:`. The instance then defaults to the APP name,
+      # `melosys-muninn` — the shape the team's other sql-bearing apps use.
+      # prod-gcp has its own GCP project, so the name cannot collide with the
+      # earlier dev deployment's instance.
       - type: POSTGRES_17
         tier: {{ db_tier }}
         diskAutoresize: true
@@ -156,7 +151,7 @@ spec:
         # as far as the pod is concerned — which is also the safety net under
         # the model-region decision: an unapproved endpoint fails closed.
         #
-        # `vertex_host` is NOT in vars-q2.json. The deploy workflow computes it
+        # `vertex_host` is NOT in vars.json. The deploy workflow computes it
         # from gcp_project + vertex_region and passes it as a VAR, because
         # Vertex has TWO host shapes — `<region>-aiplatform.googleapis.com` for
         # a region, `aiplatform.<mr>.rep.googleapis.com` for a multi-region —
@@ -187,27 +182,22 @@ spec:
       memory: 512Mi
 
   ingresses:
-    # ONE domain. An earlier revision served `ansatt.dev.nav.no` too, arguing
-    # from melosys-console — but that is one unused line in one vars file, and
-    # across all of navikt no other Melosys workload serves that domain.
+    # ONE domain: `ansatt.nav.no`, in tenant `nav.no`.
     #
-    # It was dropped on measurement, not taste. `ansatt.dev.nav.no` runs
-    # wonderwall in SSO mode: a SINGLE centralised OIDC client (tenant
-    # `nav.no`) authenticates every app on the domain, so this app's own
-    # registration — and with it `allowAllUsers: false` and the group below —
-    # is not in the loop for that login. On `intern.dev.nav.no` it is. Since
-    # the group is the ONLY thing deciding who may reach this pod, a domain
-    # where it may not apply is a wider door than this deployment intends.
-    #
-    # Re-adding it is one commit. Answer the gate question first: log in on
-    # that domain with a `nav.no` account that is NOT a member of the group,
-    # and see whether it reaches the app.
-    - {{ ingress_intern }}
+    # That domain runs wonderwall in SSO mode (measured on its dev twin,
+    # `ansatt.dev.nav.no`, 2026-09-12): a SINGLE centralised OIDC client
+    # authenticates every app on the domain, ahead of this app's sidecar. So
+    # whether `allowAllUsers: false` and the group below take part in that
+    # login is not something this manifest decides. The group is the ONLY
+    # thing deciding who may reach this pod, so verify it after the first
+    # deploy: log in with a `nav.no` account that is NOT a member of the group,
+    # and see whether it reaches the app. See docs/PREREQUISITES.md §4.
+    - {{ ingress }}
 
   # MUNINN_ADMIN_IDENTS arrives HERE, not in `env:` below, and this repo is
   # PUBLIC — that is the whole reason. An `oid` is a stable personal identifier
   # for a named human in the directory, so a checked-in list of them is
-  # personopplysninger, unlike every other value in vars-q2.json, which is
+  # personopplysninger, unlike every other value in vars.json, which is
   # infrastructure naming.
   #
   # `envFrom` injects the secret's keys VERBATIM, so the key inside this secret
@@ -222,7 +212,7 @@ spec:
   # melosys-console-q2 mounts `envFrom: [{secret: melosys-console-q2}]`. An
   # earlier revision used a distinct `…-admin-idents` name on the theory that
   # nais reserves the app name for its own generated secrets. It does not —
-  # those are prefixed (`azure-melosys-muninn-q2-…`), and console has shipped
+  # those are prefixed (`azure-melosys-muninn-…`), and console has shipped
   # the bare name for years. One secret per app, keys inside.
   #
   # The durable fix is not a longer allowlist: resolve admin from the `groups`
@@ -259,7 +249,7 @@ spec:
       value: "none"
     - name: MUNINN_TENANT
       value: {{ tenant }}
-    # BOTH ingress origins, verbatim, with the scheme, comma-separated. This
+    # The ingress origin, verbatim, with the scheme (comma-separated if more). This
     # stops the pod TWICE if it is wrong: an authenticating mode refuses to BOOT
     # on an empty value, and the origin check compares Origin against this list
     # and never against the request's own Host (deliberately, as a DNS-rebinding
@@ -274,7 +264,7 @@ spec:
     # reasoning is why this stays derived even now that it names ONE host:
     # the day a second ingress comes back, the list follows it.
     - name: MUNINN_ALLOWED_ORIGINS
-      value: "{{ ingress_intern }}"
+      value: "{{ ingress }}"
 
     # --- the model -----------------------------------------------------------
     # Vertex, via the workload-identity SA granted above. No key anywhere.

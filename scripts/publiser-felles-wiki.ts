@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Publiserer sider fra en lokal wiki-mappe til felles-wiki-bøtta, som
- * melosys-muninn-q2 speiler og viser skrivebeskyttet på
+ * melosys-muninn speiler og viser skrivebeskyttet på
  * /wiki?wiki=melosys-felles. Sletter objekter med `--fjern`.
  *
  *   bun scripts/publiser-felles-wiki.ts [--dry-run] [--tillat-ident] [--bucket <navn>] [--] <wiki-rot> <relPath>...
@@ -40,7 +40,7 @@
  * 3 minst én opplasting eller sletting feilet (de andre er gjennomført).
  *
  * Bøtte: `--bucket`, ellers FELLES_WIKI_BUCKET (tom verdi teller ikke), ellers
- * `felles_wiki_bucket` i nais/vars-q2.json. Ingen avhengigheter utover Bun og
+ * `felles_wiki_bucket` i nais/vars.json. Ingen avhengigheter utover Bun og
  * `gcloud`.
  */
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
@@ -744,7 +744,7 @@ export function kjør(argv: string[], o: Omgivelser): number {
   if (valg.fjern) return fjern(valg, bucket, o);
 
   const [rotArg, ...stier] = valg.posisjonelle;
-  const ingress = typeof o.vars.ingress_intern === "string" ? o.vars.ingress_intern : "https://melosys-muninn-q2.intern.dev.nav.no";
+  const ingress = typeof o.vars.ingress === "string" ? o.vars.ingress : "https://melosys-muninn.ansatt.nav.no";
   const oppgitt = path.resolve(rotArg!);
   if (!existsSync(oppgitt) || !statSync(oppgitt).isDirectory()) {
     o.feil("Feil: wiki-roten finnes ikke eller er ikke en mappe");
@@ -848,7 +848,7 @@ export function kjør(argv: string[], o: Omgivelser): number {
 }
 
 function lesVars(): Record<string, unknown> {
-  const fil = path.join(import.meta.dir, "..", "nais", "vars-q2.json");
+  const fil = path.join(import.meta.dir, "..", "nais", "vars.json");
   try {
     return JSON.parse(readFileSync(fil, "utf8")) as Record<string, unknown>;
   } catch {

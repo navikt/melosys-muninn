@@ -2,7 +2,7 @@
  * Step zero's WebSocket echo server — see docs/step-zero-websocket.md.
  *
  * The single question it exists to answer: does a WebSocket upgrade survive
- * the dev-gcp ingress controller and the wonderwall sidecar? Nothing else.
+ * the nais ingress controller and the wonderwall sidecar? Nothing else.
  * It holds no state, reaches no database, calls no model, and is thrown away
  * the moment the first real deploy replaces it.
  *

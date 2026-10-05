@@ -1,11 +1,11 @@
 # Step zero's stub Application — see docs/step-zero-websocket.md.
 #
-# WHAT THIS IS FOR: proving that a WebSocket upgrade survives the dev-gcp
+# WHAT THIS IS FOR: proving that a WebSocket upgrade survives the nais
 # ingress controller AND the wonderwall sidecar, before the org buys Cloud SQL,
 # the GCP project or Vertex quota. It is applied by
 # .github/workflows/step-zero.yml, which also builds and pushes the echo image
 # — NOT by .github/workflows/deploy.yml, which refuses to run while any
-# REPLACE_ME survives in vars-q2.json, and `gcp_project` and `vertex_region`
+# REPLACE_ME survives in vars.json, and `gcp_project` and `vertex_region`
 # are still placeholders at this point in the schedule. That refusal is correct;
 # the second workflow is how step zero happens anyway.
 #
@@ -24,10 +24,10 @@
 #   - the whole `azure:` block — tenant, allowAllUsers:false, the group, and
 #     `sidecar.autoLogin: true`. autoLogin is what refuses an unauthenticated
 #     upgrade AT THE SIDECAR, which is precisely the leg being proven.
-#   - the ingress. ONE now: ../app.yaml dropped `ansatt.dev.nav.no` after
-#     measuring that the domain's SSO mode authenticates through a shared
-#     client, leaving this app's group gate out of that login. The stub must
-#     serve whatever the real app serves, so it follows.
+#   - the ingress. ONE, on `ansatt.nav.no`, the same as ../app.yaml. That
+#     domain puts its own login in front of the sidecar, so on it the stub
+#     proves the upgrade through BOTH. The stub must serve whatever the real
+#     app serves, so it follows.
 #
 # WHAT IS DELIBERATELY ABSENT: gcp.sqlInstances, gcp.permissions,
 # accessPolicy, envFrom, and every muninn env var. None of them is needed to
@@ -118,4 +118,4 @@ spec:
       memory: 64Mi
 
   ingresses:
-    - {{ ingress_intern }}
+    - {{ ingress }}
