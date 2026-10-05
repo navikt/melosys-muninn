@@ -128,7 +128,8 @@ DEPLOYED=$(printf '%s' "$DEP" | ref_of) || fail "workflowen er grønn ($RUN_URL)
 echo "deployment-en kjører muninn $SHA"
 # Podden selv: minst én oppdatert replika er klar for denne generasjonen.
 READY=$(printf '%s' "$DEP" \
-  | jq -r '(.status.observedGeneration // 0) >= .metadata.generation and (.status.updatedReplicas // 0) >= 1 and (.status.readyReplicas // 0) >= 1')
+  | jq -r '(.metadata.generation | type) == "number" and (.status.observedGeneration // 0) >= .metadata.generation and (.status.updatedReplicas // 0) >= 1 and (.status.readyReplicas // 0) >= 1') \
+  || fail "workflowen er grønn ($RUN_URL), men status fra deployment-en kunne ikke tolkes. Sjekk med kubectl"
 [ "$READY" = true ] || fail "workflowen er grønn ($RUN_URL), men deployment-en har ingen klar, oppdatert replika. Sjekk poden med kubectl"
 echo "podden er klar"
 

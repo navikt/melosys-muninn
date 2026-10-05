@@ -156,7 +156,7 @@ needs three things, of which only the first is obvious:
    `/var/run/secrets/nais.io/sqlcertificate` — `DB_URL` is `sslmode=verify-ca`
    against a private IP and names three files under that path. Without it the
    connection fails in TLS, not in SQL.
-3. **A NetworkPolicy granting egress to the instance's private IP.** This is
+3. **A NetworkPolicy granting egress to the instance's IPs.** This is
    the one that costs an hour. NAIS generates `sql-<instance>-<app>` selecting
    `app: <app>`, and the job's pods are `app: <app>-provision`, so they match
    nothing and the connection dies as `CONNECT_TIMEOUT` — which reads like a
@@ -183,17 +183,14 @@ spec:
     - to:
         - ipBlock:
             cidr: <read it from the app's own sql-<instance>-<app> policy>
+        # one `- ipBlock:` entry per address that policy lists
 ```
 
-Copy EVERY `ipBlock` the generated policy lists: the prod instance's policy
-named two addresses on 2026-10-05 (the private IP the job connected on, and a
-public one), where the dev instance's named one.
-
-After a successful `--yes`, the app's crash-looping pod starts by itself on its
-next retry, within five minutes. A team member cannot hurry it:
-`kubectl rollout restart` needs `patch` on deployments, which the team lacks
-(measured in prod 2026-10-05); `kubectl wait --for=condition=ready pod -l
-app=<app>` shows when it is up.
+Copy EVERY `ipBlock` the generated policy lists, one entry each: the prod
+instance's policy named two addresses on 2026-10-05 (the private IP the job
+connected on, and a public one), where the dev instance's named one. Copying
+all of them keeps the job's egress identical to the app's, whichever address
+the URL names.
 
 Read the CIDR from the generated policy rather than from `gcloud`, so it cannot
 drift from what the app itself is allowed to reach. Delete the policy with the
@@ -204,6 +201,12 @@ asking for it. Read that line. It is the only thing standing between
 "provisioned the pod's database" and "provisioned a laptop" — and the reason the
 confirmation exists at all is that Bun auto-loads `.env`, so a bare invocation in
 a checkout resolves whatever that file names.
+
+After a successful `--yes`, the app's crash-looping pod starts by itself on its
+next retry, within five minutes. A team member cannot hurry it:
+`kubectl rollout restart` is refused with `container.deployments.update`, a
+permission the team lacks (measured in prod 2026-10-05); `kubectl wait --for=condition=ready pod -l
+app=<app>` shows when it is up.
 
 ## What it refuses, and why the refusal matters
 
