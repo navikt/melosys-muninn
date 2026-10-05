@@ -8,7 +8,7 @@ import path from "node:path";
 
 const yml = readFileSync(path.join(import.meta.dir, "..", ".github", "workflows", "deploy.yml"), "utf8");
 const steg = yml.slice(yml.indexOf("- name: The felles-wiki values have a usable shape"));
-const program = /BAD=\$\(jq -r '([\s\S]*?)' deploy\/nais\/vars-q2\.json\)/.exec(steg)?.[1];
+const program = /BAD=\$\(jq -r '([\s\S]*?)' deploy\/nais\/vars\.json\)/.exec(steg)?.[1];
 
 const tmp = mkdtempSync(path.join(tmpdir(), "deploy-vakt-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -21,7 +21,7 @@ function vakt(vars: Record<string, unknown>): string {
   return r.stdout.toString().trim();
 }
 
-const GOD_BØTTE = "melosys-felles-wiki-q2";
+const GOD_BØTTE = "melosys-felles-wiki";
 
 describe.skipIf(!Bun.which("jq"))("deploy.yml: felles_wiki_project_number", () => {
   test("programmet finnes i steget", () => {

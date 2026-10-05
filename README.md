@@ -36,14 +36,14 @@ to prevent.
 | Path | What it is |
 |---|---|
 | `nais/app.yaml` | The Application manifest. Templated with `{{ }}`; every comment in it explains a constraint that is easy to "simplify" into an outage. |
-| `nais/vars-q2.json` | The values. Ships full of `REPLACE_ME_` — see `docs/PREREQUISITES.md`. |
+| `nais/vars.json` | The values. Ships full of `REPLACE_ME_` — see `docs/PREREQUISITES.md`. |
 | `bots/melosys/` | The bot: persona, `config.json`, an empty `.mcp.json`. Copied into `bots/` in the build context. |
 | `.github/workflows/deploy.yml` | Check out muninn at a pinned ref → resolve it to a SHA → assign the Vertex base URL → overlay → build and push → pull the digest → assert → scan → deploy. |
 | `build/Dockerfile.nais` + `build/nais-entrypoint.ts` | The deployed image: Docker Hardened Images Bun, no shell, and a shell-free entrypoint. See `docs/runtime-image.md`. |
 | `build/upstream-dockerfile-pin.txt` | The sha256 of upstream's whole `Dockerfile` and `scripts/docker-entrypoint.sh`, and its `scripts.start`, as last mirrored. The workflow stops when any of them changes. |
 | `nais/step-zero/` | The stub `Application` and its own vars file, for proving the WebSocket upgrade **before** buying Cloud SQL and the GCP project. |
 | `nais/provision-job.yaml` + `nais/provision-netpol.yaml` | The one-shot schema step, as a Naisjob. Applied by hand, not by a workflow — `kubectl debug` is unavailable to the team and the job needs a NetworkPolicy nais will not generate for it. See `docs/db-setup.md`. |
-| `.github/workflows/step-zero.yml` | Builds the echo image → pushes it → applies the stub. Deliberately separate from `deploy.yml`, which refuses while `vars-q2.json` holds a `REPLACE_ME`. |
+| `.github/workflows/step-zero.yml` | Builds the echo image → pushes it → applies the stub. Deliberately separate from `deploy.yml`, which refuses while `vars.json` holds a `REPLACE_ME`. |
 | `build/echo/` | The WebSocket echo image step zero deploys. Built by the workflow above; it has nothing to do with the muninn build. |
 | `scripts/publiser-felles-wiki.ts` | The curator's publish and retract script for the felles-wiki bucket: path, size and identifier checks, then an upload of the scanned bytes (`gcloud storage cp -`); `--fjern` deletes. Tests: `bun test scripts/` (no install step; Bun only). |
 | `CODEOWNERS` | The team, on everything. This repo is public and takes outside pull requests. |
@@ -120,13 +120,17 @@ immediately, and that SHA is what the GAR tag (`muninn-<sha>`) and the pod's
 `MUNINN_REF` carry: a tag can be moved upstream. Public muninn has no tags
 today, so the first deploy will name a SHA.
 
-From a laptop, `make deploy-q2` does the whole round: it resolves muninn
+From a laptop, `make deploy` does the whole round: it resolves muninn
 `main` to a SHA, checks the upstream pin before dispatching, watches the run
-and then checks that the deployment's `MUNINN_REF` is that SHA and
-`/api/live` answers 200. `make deploy-q2-sjekk` runs only the checks. To
-deploy a specific tag or SHA, run `scripts/deploy-q2.sh <tag|sha>` (prefix
+and then checks that the deployment's `MUNINN_REF` is that SHA and that the
+pod is ready. The ingress itself cannot be checked from outside on
+`ansatt.nav.no`: the domain answers every host with its own login, so the
+script says so and you open `/chat` in a browser. `make deploy-sjekk` runs
+only the pre-dispatch checks (the ref and the upstream pin) and starts nothing.
+To
+deploy a specific tag or SHA, run `scripts/deploy.sh <tag|sha>` (prefix
 `DRY_RUN=1` to check only); the make targets take no ref. It needs `gh`, `jq`,
-`kubectl` on context `dev-gcp` and naisdevice.
+`kubectl` on context `prod-gcp` and naisdevice.
 
 Before the first deploy, work through **`docs/PREREQUISITES.md`**. §1–§10 are
 ten items and each one alone makes the pod useless; §0 is not one of them, it
@@ -138,15 +142,20 @@ project owns the quota.
 
 ## What this pod is
 
-- **dev-gcp only, as `melosys-muninn-q2`.** Prod carries a personopplysninger
-  decision that is not an engineering call.
-- **One ingress**, on `intern.dev.nav.no`, which needs naisdevice.
-  `MUNINN_ALLOWED_ORIGINS` is derived from it rather than maintained beside it.
-  `ansatt.dev.nav.no` was served until 2026-09-12 and was dropped: that domain
-  authenticates through a single shared SSO client, which leaves this app's
-  group gate out of the login — and that gate is the only thing deciding who
-  reaches the pod. `docs/PREREQUISITES.md` §4 has the measurement and the one
-  test that would allow it back.
+- **prod-gcp, as `melosys-muninn`**, with its own Entra group in tenant
+  `nav.no`. It ran in dev-gcp as `melosys-muninn-q2` until 2026-10. Colleague
+  chat content is personopplysninger; see `SECURITY.md` for what is still
+  open.
+- **One ingress**, on `ansatt.nav.no`. `MUNINN_ALLOWED_ORIGINS` is derived
+  from it rather than maintained beside it. That domain authenticates through
+  a single shared SSO client ahead of the sidecar, so whether this app's group
+  gate takes part in the login has to be checked once after the first deploy —
+  `docs/PREREQUISITES.md` §4 has the test.
+- **The dev deployment is not managed from here any more.** `melosys-muninn-q2`
+  in dev-gcp, its Cloud SQL instance (colleague chat content), the
+  `melosys-felles-wiki-q2` bucket and its admin secret keep running until
+  someone deletes them. Pages in the dev bucket are not copied to the prod one;
+  republish them with `scripts/publiser-felles-wiki.ts`.
 - **Chat, plus one read-only wiki.** `MUNINN_PROFILE=nais` drops fourteen
   route groups; the plans board, the capture verticals and the logs page are
   not registered. What is left is `/chat`, the operator dashboard, two health

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Deployer melosys-muninn til q2 (dev-gcp) fra laptopen. `make deploy-q2` kjører
+# Deployer melosys-muninn til prod-gcp fra laptopen. `make deploy` kjører
 # skriptet uten argument; en bestemt ref gis bare som argument, aldri via miljøet.
 #
-#   scripts/deploy-q2.sh [<muninn-ref>]     ref: tag eller full commit-SHA; standard er tuppen av muninn main
-#   DRY_RUN=1 scripts/deploy-q2.sh          stopp etter forhåndssjekkene, uten å starte workflowen
+#   scripts/deploy.sh [<muninn-ref>]     ref: tag eller full commit-SHA; standard er tuppen av muninn main
+#   DRY_RUN=1 scripts/deploy.sh          stopp etter forhåndssjekkene, uten å starte workflowen
 #                                            (alle verdier unntatt tom og 0 regnes som tørrkjøring)
 #
 # Skriptet erstatter ingen av vaktene i deploy.yml. Det løser ref-en til en SHA
@@ -12,15 +12,15 @@
 # at deployment-en bærer den SHA-en.
 #
 # Workflowen kjører fra main i deploy-repoet, så alt skriptet leser fra dette
-# repoet (deploy.yml, vars-q2.json, pinnen) hentes derfra, ikke fra arbeidskopien.
+# repoet (deploy.yml, vars.json, pinnen) hentes derfra, ikke fra arbeidskopien.
 #
-# Krever: gh (innlogget), git, jq, shasum, kubectl med kontekst dev-gcp og
-# naisdevice for sluttsjekken mot ingressen.
+# Krever: gh (innlogget), git, jq, shasum, kubectl med kontekst prod-gcp og
+# naisdevice, som klyngens API krever.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DEPLOY_REPO=navikt/melosys-muninn
-CONTEXT=dev-gcp
+CONTEXT=prod-gcp
 
 fail() { echo "$*" >&2; exit 1; }
 # Én fil fra et repo på en gitt ref, rått innhold.
@@ -35,7 +35,7 @@ if [ "$(git -C "$ROOT" rev-parse HEAD)" != "$DEPLOY_SHA" ]; then
 fi
 
 DEPLOY_YML=$(raw "$DEPLOY_REPO" .github/workflows/deploy.yml "$DEPLOY_SHA") || fail "klarte ikke å lese deploy.yml fra $DEPLOY_REPO main"
-VARS=$(raw "$DEPLOY_REPO" nais/vars-q2.json "$DEPLOY_SHA") || fail "klarte ikke å lese nais/vars-q2.json fra $DEPLOY_REPO main"
+VARS=$(raw "$DEPLOY_REPO" nais/vars.json "$DEPLOY_SHA") || fail "klarte ikke å lese nais/vars.json fra $DEPLOY_REPO main"
 # Til fil, ikke `$(…)`: kommandoerstatning stryker avsluttende linjeskift, og
 # workflowen sammenligner filen byte for byte.
 PIN=$(mktemp)
@@ -45,7 +45,7 @@ MUNINN_REPO=$(printf '%s\n' "$DEPLOY_YML" | awk '$1 == "MUNINN_REPO:" {print $2;
 [ -n "$MUNINN_REPO" ] || fail "fant ikke MUNINN_REPO i deploy.yml"
 APP=$(printf '%s' "$VARS" | jq -er '.app_name')
 NAMESPACE=$(printf '%s' "$VARS" | jq -er '.namespace')
-INGRESS=$(printf '%s' "$VARS" | jq -er '.ingress_intern')
+INGRESS=$(printf '%s' "$VARS" | jq -er '.ingress')
 
 # Samme regel som steget «The ref must be a tag or a full commit SHA, never a
 # branch» i deploy.yml: en full SHA, eller en tag som finnes upstream.
@@ -86,12 +86,14 @@ echo "upstream-pinnen stemmer"
 # `get --raw` gjør ett kall uten API-oppdagelse, så en utilgjengelig klynge
 # feiler etter tidsavbruddet. `get deploy/…` prøver oppdagelsen på nytt og
 # bruker flere ganger så lang tid.
-deployed_ref() {
+deployment_json() {
   kubectl --context "$CONTEXT" --request-timeout=10s \
-    get --raw "/apis/apps/v1/namespaces/$NAMESPACE/deployments/$APP" \
-    | APP="$APP" jq -er '.spec.template.spec.containers[] | select(.name == env.APP) | .env[] | select(.name == "MUNINN_REF") | .value'
+    get --raw "/apis/apps/v1/namespaces/$NAMESPACE/deployments/$APP"
 }
-BEFORE=$(deployed_ref 2>/dev/null) || {
+ref_of() {
+  APP="$APP" jq -er '.spec.template.spec.containers[] | select(.name == env.APP) | .env[] | select(.name == "MUNINN_REF") | .value'
+}
+BEFORE=$(deployment_json 2>/dev/null | ref_of 2>/dev/null) || {
   BEFORE=
   echo "  NB: fikk ikke lest MUNINN_REF fra deployment-en (svarer ikke klyngen, er naisdevice av, eller finnes ikke deployen ennå?)"
 }
@@ -117,9 +119,27 @@ gh run watch "${RUN_URL##*/}" -R "$DEPLOY_REPO" --exit-status --interval 30 > /d
 echo "workflowen er grønn"
 
 # nais/deploy venter selv på utrullingen, så en grønn kjøring er en ferdig utrulling.
-DEPLOYED=$(deployed_ref) || fail "workflowen er grønn ($RUN_URL), men MUNINN_REF fra deployment-en kunne ikke leses. Ikke start på nytt; sjekk med kubectl når klyngen svarer"
+# Én lesing: SHA-en og klar-sjekken gjelder samme generasjon.
+DEP=$(deployment_json) || fail "workflowen er grønn ($RUN_URL), men deployment-en kunne ikke leses. Ikke start på nytt; sjekk med kubectl når klyngen svarer"
+DEPLOYED=$(printf '%s' "$DEP" | ref_of) || fail "workflowen er grønn ($RUN_URL), men deployment-en har ingen MUNINN_REF. Ikke start på nytt før du har sjekket"
 [ "$DEPLOYED" = "$SHA" ] || fail "workflowen er grønn ($RUN_URL), men deployment-en har MUNINN_REF=$DEPLOYED, forventet $SHA. Kjørte en annen deploy samtidig? Ikke start på nytt før du har sjekket"
 echo "deployment-en kjører muninn $SHA"
-LIVE=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$INGRESS/api/live") || true
-[ "$LIVE" = 200 ] || fail "workflowen er grønn ($RUN_URL), men $INGRESS/api/live svarte '$LIVE' (naisdevice på?)"
-echo "$INGRESS/api/live: 200"
+# Podden selv: minst én oppdatert replika er klar for denne generasjonen.
+READY=$(printf '%s' "$DEP" \
+  | jq -r '(.status.observedGeneration // 0) >= .metadata.generation and (.status.updatedReplicas // 0) >= 1 and (.status.readyReplicas // 0) >= 1') \
+  || fail "workflowen er grønn ($RUN_URL), men status fra deployment-en kunne ikke tolkes. Sjekk med kubectl"
+[ "$READY" = true ] || fail "workflowen er grønn ($RUN_URL), men deployment-en har ingen klar, oppdatert replika. Sjekk poden med kubectl"
+echo "podden er klar"
+
+# ansatt.nav.no har en egen innlogging foran appen: alle vertsnavn på domenet,
+# også et som ikke finnes, svarer 302 til /oauth2/login på selve domenet (målt
+# 2026-10-05). Der kan ingressen ikke sjekkes uten innlogging, og skriptet
+# sier det i stedet for å godta 302-en som bevis.
+DOMENE=${INGRESS#https://*.}
+LIVE=$(curl -s -m 10 -o /dev/null -w '%{http_code} %{redirect_url}' "$INGRESS/api/live") || true
+case "$LIVE" in
+  "200 "*) echo "$INGRESS/api/live: 200" ;;
+  "302 https://$DOMENE/oauth2/login" | "302 https://$DOMENE/oauth2/login?"*)
+    echo "  NB: $DOMENE svarer med sin egen innlogging før appen, så ingressen er IKKE sjekket. Åpne $INGRESS/chat i nettleseren" ;;
+  *) fail "workflowen er grønn ($RUN_URL), men $INGRESS/api/live svarte '$LIVE'" ;;
+esac

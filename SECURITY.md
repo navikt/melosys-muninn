@@ -30,7 +30,7 @@ Application vulnerabilities belong in the muninn repository.
 
 ## What is deliberately *not* a secret here
 
-Everything in `nais/vars-q2.json` is infrastructure naming — namespace, team,
+Everything in `nais/vars.json` is infrastructure naming — namespace, team,
 ingress hostnames, the Entra tenant, a group object id, a GCP project id and a
 region. Those are public across `navikt` by the hundred; access is granted by
 Entra group membership and GCP IAM, not by the obscurity of an identifier.
@@ -46,7 +46,7 @@ not a convenience.
 
 ## Scope of the deployment itself
 
-This is a **dev-gcp** deployment. Colleague chat content is personopplysninger
-and lands in two Cloud SQL stores (`messages`, `activity_log`) keyed to a
-NAVident; retention is an open question and is the reason there is no prod
-deployment. See `docs/PREREQUISITES.md`.
+This is a **prod-gcp** deployment (it ran in dev-gcp until 2026-10).
+Colleague chat content is personopplysninger and lands in two Cloud SQL stores
+(`messages`, `activity_log`) keyed to a NAVident. Retention is still an open
+question; moving to prod-gcp did not answer it. See `docs/PREREQUISITES.md`.

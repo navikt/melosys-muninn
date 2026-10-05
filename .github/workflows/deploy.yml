@@ -3,7 +3,7 @@ name: deploy
 # Builds an image from PUBLIC muninn at a pinned ref with build/Dockerfile.nais
 # (Docker Hardened Images Bun runtime), overlaid with this repo's bot folder,
 # pushes it to the team's GAR, checks and scans the pushed digest, and deploys
-# that digest to dev-gcp. Nothing in the public repo is edited: the only things
+# that digest to prod-gcp. Nothing in the public repo is edited: the only things
 # this workflow changes in the checkout are `bots/` (replaced wholesale), one
 # added file (`nais-entrypoint.ts`) and one line removed from `.dockerignore`.
 #
@@ -31,9 +31,9 @@ on:
       cluster:
         description: "nais cluster"
         required: true
-        default: dev-gcp
+        default: prod-gcp
         type: choice
-        options: [dev-gcp]
+        options: [prod-gcp]
 
 # WORKFLOW level, not job level. The one job below is the whole pipeline today,
 # but every `nais/login` and `nais/deploy` needs `id-token: write`, and a job
@@ -166,9 +166,9 @@ jobs:
             | map(select(.key | startswith("_") | not))
             | map(select(.value | tostring | test("REPLACE_ME")))
             | map(.key) | join(", ")
-          ' deploy/nais/vars-q2.json)
+          ' deploy/nais/vars.json)
           if [ -n "$UNFILLED" ]; then
-            echo "::error::vars-q2.json still has placeholders: $UNFILLED — see docs/PREREQUISITES.md"; exit 1
+            echo "::error::vars.json still has placeholders: $UNFILLED — see docs/PREREQUISITES.md"; exit 1
           fi
 
       # The felles-wiki values reach the manifest in three places: the bucket
@@ -186,8 +186,8 @@ jobs:
       # pin nothing, so it is refused here instead.
       - name: The felles-wiki values have a usable shape
         run: |
-          jq -e -s 'length == 1 and (.[0] | type == "object")' deploy/nais/vars-q2.json > /dev/null || {
-            echo "::error::vars-q2.json is not exactly one JSON object (empty, unreadable, malformed, or two documents concatenated)"; exit 1
+          jq -e -s 'length == 1 and (.[0] | type == "object")' deploy/nais/vars.json > /dev/null || {
+            echo "::error::vars.json is not exactly one JSON object (empty, unreadable, malformed, or two documents concatenated)"; exit 1
           }
           BAD=$(jq -r '
             [ (if (.felles_wiki_bucket | type) == "string"
@@ -199,9 +199,9 @@ jobs:
                then empty
                else "felles_wiki_project_number (expected 1-20 digits with no leading zero, as a JSON string)" end)
             ] | join(", ")
-          ' deploy/nais/vars-q2.json)
+          ' deploy/nais/vars.json)
           if [ -n "$BAD" ]; then
-            echo "::error::not a usable value in vars-q2.json: $BAD"; exit 1
+            echo "::error::not a usable value in vars.json: $BAD"; exit 1
           fi
 
       # The project and the region would otherwise live in FOUR places that
@@ -231,8 +231,8 @@ jobs:
           # MULTI-LINE value; `\A`/`\z` because Oniguruma's `$` matches before
           # a trailing newline. Every earlier form, and why each failed:
           # docs/pipeline-guards.md §3.
-          jq -e -s 'length == 1 and (.[0] | type == "object")' deploy/nais/vars-q2.json > /dev/null || {
-            echo "::error::vars-q2.json is not exactly one JSON object (empty, unreadable, malformed, or two documents concatenated)"; exit 1
+          jq -e -s 'length == 1 and (.[0] | type == "object")' deploy/nais/vars.json > /dev/null || {
+            echo "::error::vars.json is not exactly one JSON object (empty, unreadable, malformed, or two documents concatenated)"; exit 1
           }
 
           BAD=$(jq -r '
@@ -244,14 +244,14 @@ jobs:
                 or ($doc[.] | test("\\A[a-z0-9]([a-z0-9-]*[a-z0-9])?\\z") | not)
               ))
             | join(", ")
-          ' deploy/nais/vars-q2.json)
+          ' deploy/nais/vars.json)
           if [ -n "$BAD" ]; then
-            echo "::error::not a usable value in vars-q2.json: $BAD — expected lowercase letters, digits and inner hyphens only"; exit 1
+            echo "::error::not a usable value in vars.json: $BAD — expected lowercase letters, digits and inner hyphens only"; exit 1
           fi
 
-          PROJECT=$(jq -r '.gcp_project' deploy/nais/vars-q2.json)
-          REGION=$(jq -r '.vertex_region' deploy/nais/vars-q2.json)
-          TEAM=$(jq -r '.team' deploy/nais/vars-q2.json)
+          PROJECT=$(jq -r '.gcp_project' deploy/nais/vars.json)
+          REGION=$(jq -r '.vertex_region' deploy/nais/vars.json)
+          TEAM=$(jq -r '.team' deploy/nais/vars.json)
 
           # muninn refuses `global` at boot in either Vertex variable name, and
           # again on the URL itself — the region routes to whichever region has
@@ -307,7 +307,7 @@ jobs:
           # A step cannot hand a value to a later step's `env:` any other way,
           # and there is exactly ONE `VAR:` line on the deploy — see the comment
           # there. `team` rides along for the same reason the base URL does:
-          # hardcoding it in the build step while vars-q2.json carries its own
+          # hardcoding it in the build step while vars.json carries its own
           # copy for `labels.team` would push to one team's GAR and label the
           # app with another.
           {
@@ -661,7 +661,7 @@ jobs:
       # database it must refuse with require-provisioned's "could not ask"
       # code (2), passed through, and say so in build/nais-entrypoint.ts's own
       # words. The exit code alone does not identify the entrypoint: upstream's
-      # shell entrypoint also exits 2 here (measured against the previous Q2
+      # shell entrypoint also exits 2 here (measured against an earlier
       # image). Costs the script's 30 s connect budget.
       - name: The entrypoint refuses to start without a database
         env:
@@ -733,7 +733,7 @@ jobs:
         env:
           CLUSTER: ${{ inputs.cluster }}
           RESOURCE: deploy/nais/app.yaml
-          VARS: deploy/nais/vars-q2.json
+          VARS: deploy/nais/vars.json
           # The same digest reference every check above pulled and scanned.
           # Without this line `app.yaml`'s `image: {{ image }}` renders
           # unresolved.

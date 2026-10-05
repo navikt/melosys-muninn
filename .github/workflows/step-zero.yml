@@ -8,7 +8,7 @@ name: step-zero
 # WHY THIS IS A SECOND WORKFLOW RATHER THAN A HAND-RUN COMMAND. An earlier
 # draft of the runbook told the operator to apply the stub by hand:
 #
-#     RESOURCE=nais/step-zero/stub.yaml VARS=... CLUSTER=dev-gcp nais/deploy
+#     RESOURCE=nais/step-zero/stub.yaml VARS=... CLUSTER=<cluster> nais/deploy
 #
 # That is not runnable and never was. `nais/deploy` is a GitHub Action path
 # (nais/deploy/actions/deploy@v2, as deploy.yml uses it), not a binary; a shell
@@ -24,10 +24,15 @@ name: step-zero
 # no command — it is running step zero where the identity exists.
 #
 # This is still "outside the placeholder-guarded workflow" in the sense the
-# plan means: deploy.yml refuses while any REPLACE_ME survives in vars-q2.json,
+# plan means: deploy.yml refuses while any REPLACE_ME survives in vars.json,
 # and `gcp_project` / `vertex_region` are still placeholders at this point in
 # the schedule. This workflow reads vars-step-zero.json instead, which carries
 # only the values §1–§4 already bought.
+#
+# ⚠️ The stub takes the REAL app's name (see stub.yaml), so once melosys-muninn
+# runs in the cluster, dispatching this REPLACES the running app with the echo
+# stub until the next deploy.yml run. Run it before the first real deploy, or
+# accept the outage.
 #
 # `workflow_dispatch` ONLY, for the same reason deploy.yml is: a pull request
 # from a fork can then never run it and never sees a secret.
@@ -38,9 +43,9 @@ on:
       cluster:
         description: "nais cluster"
         required: true
-        default: dev-gcp
+        default: prod-gcp
         type: choice
-        options: [dev-gcp]
+        options: [prod-gcp]
 
 # WORKFLOW level, not job level — same reason as deploy.yml: every nais/login
 # and nais/deploy needs `id-token: write`, and a job added later would silently
@@ -56,7 +61,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # vars-step-zero.json is NOT covered by deploy.yml's guard — that one
-      # reads vars-q2.json. Without this check the placeholder reaches the
+      # reads vars.json. Without this check the placeholder reaches the
       # cluster as an image reference and the pod goes ImagePullBackOff, which
       # build/echo/Dockerfile's own header notes "reads like a registry
       # permission problem" — i.e. the operator escalates a procurement item

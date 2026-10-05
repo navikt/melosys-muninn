@@ -21,20 +21,20 @@ authenticated from the Bearer channel or not at all.
 ## What is not known
 
 The ingress. wonderwall proxying an upgrade on a developer's machine is not the
-same as an nginx ingress controller doing it in dev-gcp, and this is the half
+same as an nginx ingress controller doing it in the cluster, and this is the half
 that has surprised people before.
 
 ## The catch
 
 Step zero is first but it is **not free**. Proving the upgrade *through the
 sidecar* requires §1–§4 of `PREREQUISITES.md` already in place — the app
-registration, admin consent, the group and **both** ingresses — because `autoLogin`
+registration, admin consent, the group and the ingress — because `autoLogin`
 refuses an unauthenticated upgrade **at the sidecar**, and it never reaches the
 app at all. The harness measured exactly that locally.
 
 So the sequence is:
 
-1. Buy §1–§4 (app registration + consent + group + the two ingresses).
+1. Buy §1–§4 (app registration + consent + group + the ingress).
 2. Deploy a **stub** `Application` — same `app_name`, same `azure` block, same
    sidecar settings and ingresses — by dispatching `.github/workflows/step-zero.yml`,
    which is **outside** the placeholder-guarded deploy workflow.
@@ -68,7 +68,7 @@ look available here and neither is:
 it to the team GAR and applies the stub.
 
 There is **no by-hand path, and do not go looking for one.** An earlier draft of
-this page gave a command — `RESOURCE=… VARS=… CLUSTER=dev-gcp nais/deploy` —
+this page gave a command — `RESOURCE=… VARS=… CLUSTER=<cluster> nais/deploy` —
 and it was wrong twice over. `nais/deploy` is a *GitHub Action* path
 (`nais/deploy/actions/deploy@v2`), not a binary: a shell resolves the slash as a
 path and answers `no such file or directory`, exit 127. The installed `nais`
@@ -79,14 +79,14 @@ Actions**; no human holds a credential for it. Step zero runs where the identity
 already is.
 
 `step-zero.yml` is separate from `deploy.yml` for one reason: `deploy.yml`
-refuses while any `REPLACE_ME` survives in `vars-q2.json`, and `gcp_project` /
+refuses while any `REPLACE_ME` survives in `vars.json`, and `gcp_project` /
 `vertex_region` are still placeholders at this point in the schedule.
 `step-zero.yml` reads `vars-step-zero.json` instead, which carries only what
 §1–§4 already bought.
 
-**The seven values in `vars-step-zero.json` are a subset of `vars-q2.json`, and
+**The six values in `vars-step-zero.json` are a subset of `vars.json`, and
 must be identical in both files** — `app_name`, `namespace`, `team`, `tenant`,
-`group_muninn_bruker` and the two ingresses. Nothing compares the two files for
+`group_muninn_bruker` and `ingress`. Nothing compares the two files for
 you; they are separate precisely so step zero need not wait on `gcp_project` and
 `vertex_region`, and the cost of that is a copy nobody checks. Get one wrong and
 step zero proves the upgrade for a different app than the one that is deployed.
@@ -110,8 +110,8 @@ There is no shortcut that proves the sidecar half without the login half.
 
 Open the ingress in a browser and complete the wonderwall login, then open a
 WebSocket to the stub's echo path from the page's own origin (the browser
-console is enough) and watch the network panel. One domain now —
-`intern.dev.nav.no`; see the note below. What you are looking for, in order:
+console is enough) and watch the network panel. One domain —
+`ansatt.nav.no`; see the note below. What you are looking for, in order:
 
 - **101 Switching Protocols.** A 401 means the token did not arrive; a 200 with
   an HTML body means something in the path answered the upgrade as an ordinary
@@ -149,10 +149,12 @@ out — is **not** part of step zero. An echo stub cannot answer one, and it nee
 the model and the database, i.e. everything step zero exists to avoid buying
 first. It belongs to acceptance, after the first real deploy.
 
-### Why there is only one domain to check
+### The domain changed: what the dev proof does not cover
 
-`ansatt.dev.nav.no` was served until 2026-09-12 and was dropped the same day it
-first ran. Two measurements, both taken against the live stub:
+Step zero ran in dev-gcp on 2026-09-12 against `intern.dev.nav.no` and passed:
+`101`, an echo at `t=0`, and another at `t=70s`. The dev app also served
+`ansatt.dev.nav.no` that day, and dropped it after two measurements against
+the live stub:
 
 | request | intern | ansatt |
 |---|---|---|
@@ -160,21 +162,16 @@ first ran. Two measurements, both taken against the live stub:
 
 `/api/live` is in `autoLoginIgnorePaths` and the intern host honours it; the
 ansatt host does not, because that redirect is not wonderwall's — the domain
-fronts every app with its own login. Following it lands on tenant
-`62366534-…` (`nav.no`) with client `ea1738f8-…`, and `melosys-console-q2`
-lands on exactly the same one. This app's registration is in
-`trygdeetaten.no`, so a trygdeetaten account answers `AADSTS500213` there.
+fronts every app with its own login (SSO mode: tenant `62366534-…` (`nav.no`),
+client `ea1738f8-…`, the same front door `melosys-console-q2` lands on).
 
-That is SSO mode, and its consequence is the reason for the drop rather than
-the login confusion: one centralised client authenticates the whole domain, so
-the app's own `allowAllUsers: false` and group claim are not in that login.
-The group is the only thing gating this pod. `docs/PREREQUISITES.md` §4 carries
-the full account, including what is measured, what is documented, what is only
-inferred, and the single test that would let the ingress back.
-
-**Nothing here weakens step zero.** The transport question — does an upgrade
-survive the ingress and the sidecar, and does it survive going idle — was
-answered on intern: `101`, an echo at `t=0`, and another at `t=70s`.
+The prod app serves `ansatt.nav.no`. So the upgrade has been proven through
+the ingress and the sidecar, but **not through that domain's own login in
+front of them**. Either run step zero in prod-gcp before the first real deploy
+(the stub takes the real app's name, so afterwards it replaces the running
+app), or check the chat socket directly in acceptance: `101` on `/chat/ws`,
+and the socket still open after ~70 s idle. `docs/PREREQUISITES.md` §4 covers
+the other open question on that domain, the group gate.
 
 ## The ways this fails that are not the ingress
 
@@ -188,7 +185,7 @@ zero does not deploy, at the exact moment the transport really had failed.
    login looks a lot like a refused upgrade. Confirm you land on the stub at all
    before concluding anything about the socket.
 2. **The two vars files disagree.** `app_name` or an ingress differing between
-   `vars-step-zero.json` and `vars-q2.json` means the stub is proving the
+   `vars-step-zero.json` and `vars.json` means the stub is proving the
    upgrade for a different app than the one that will be deployed. Nothing
    checks this; diff them.
 3. **`Recreate` + one replica.** Every rollout drops every socket, by design. A

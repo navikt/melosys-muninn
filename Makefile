@@ -1,4 +1,4 @@
-.PHONY: help deploy-q2 deploy-q2-sjekk
+.PHONY: help deploy deploy-sjekk
 
 # Målene tar ingen ref. En bestemt ref gis som argument til skriptet.
 #
@@ -8,24 +8,24 @@
 # ekspanderes allerede når make leser den (og stopper bare om resultatet har
 # innhold), og `override REF=…` på kommandolinjen ignoreres og gir tuppen av main.
 ifneq ($(value REF),)
-$(error make-målene deployer alltid tuppen av muninn main og tar ingen REF. For en bestemt ref: scripts/deploy-q2.sh <tag|sha>. Er REF eksportert fra annet arbeid: unset REF)
+$(error make-målene deployer alltid tuppen av muninn main og tar ingen REF. For en bestemt ref: scripts/deploy.sh <tag|sha>. Er REF eksportert fra annet arbeid: unset REF)
 endif
 
-# `make deploy-q2 <sha>` gjør <sha> til et mål nummer to. make ville deployet
+# `make deploy <sha>` gjør <sha> til et mål nummer to. make ville deployet
 # main først og feilet på <sha> etterpå, så ukjente mål stopper før noe kjører.
-UKJENTE_MAL := $(filter-out help deploy-q2 deploy-q2-sjekk,$(MAKECMDGOALS))
+UKJENTE_MAL := $(filter-out help deploy deploy-sjekk,$(MAKECMDGOALS))
 ifneq ($(UKJENTE_MAL),)
-$(error ukjent mål: $(UKJENTE_MAL). make-målene tar ingen ref. For en bestemt ref: scripts/deploy-q2.sh <tag|sha>)
+$(error ukjent mål: $(UKJENTE_MAL). make-målene tar ingen ref. For en bestemt ref: scripts/deploy.sh <tag|sha>)
 endif
 
 help:
-	@echo "make deploy-q2        deployer tuppen av muninn main til q2"
-	@echo "make deploy-q2-sjekk  bare forhåndssjekkene, starter ingen workflow"
-	@echo "scripts/deploy-q2.sh <tag|sha>            deployer en bestemt ref"
-	@echo "DRY_RUN=1 scripts/deploy-q2.sh <tag|sha>  sjekker en bestemt ref"
+	@echo "make deploy         deployer tuppen av muninn main til prod-gcp"
+	@echo "make deploy-sjekk   bare forhåndssjekkene, starter ingen workflow"
+	@echo "scripts/deploy.sh <tag|sha>            deployer en bestemt ref"
+	@echo "DRY_RUN=1 scripts/deploy.sh <tag|sha>  sjekker en bestemt ref"
 
-deploy-q2:
-	@scripts/deploy-q2.sh
+deploy:
+	@scripts/deploy.sh
 
-deploy-q2-sjekk:
-	@DRY_RUN=1 scripts/deploy-q2.sh
+deploy-sjekk:
+	@DRY_RUN=1 scripts/deploy.sh

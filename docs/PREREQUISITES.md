@@ -5,7 +5,7 @@ an engineering call. **Each one alone makes the pod useless**, which is why they
 are a checklist and not a list of nice-to-haves. Nothing here can be invented
 from the muninn side.
 
-`nais/vars-q2.json` carries a `REPLACE_ME_` placeholder for most of them, and
+`nais/vars.json` carries a `REPLACE_ME_` placeholder for most of them, and
 the deploy workflow refuses to run while any placeholder survives — a
 half-filled file is the failure mode that deploys something almost-right and
 quietly.
@@ -26,7 +26,7 @@ on the list:
 - **§0** — a proof to run, not a value at all.
 
 That leaves §2, §3, §4 and §8 as the sections that *are* values you fill in
-`vars-q2.json` — and **two placeholders belong to no section at all**:
+`vars.json` — and **two placeholders belong to no section at all**:
 `REPLACE_ME_namespace` and `REPLACE_ME_team`. Both are the team's own nais
 namespace and team slug, both come from the same place every other
 `navikt`/`teammelosys` repo gets them (`melosys-console`'s own vars file is the
@@ -69,7 +69,7 @@ behaviour locally — a WS upgrade does arrive carrying `Authorization: Bearer`,
 and the session cookie is `SameSite=Lax`. The ingress is the untested half.
 
 **Everything step zero needs is in this repo**: `build/echo/` (the WebSocket
-echo image), `nais/step-zero/` (the stub `Application` and its own seven-value
+echo image), `nais/step-zero/` (the stub `Application` and its own six-value
 vars file) and `.github/workflows/step-zero.yml`, which builds the image,
 pushes it and applies the stub in one `workflow_dispatch`. Fill
 `vars-step-zero.json` and dispatch it. There is deliberately **no by-hand
@@ -121,14 +121,14 @@ overruling it would be a second, weaker check in front of the real one.
 
 ## 4. The ingress hostname — one, and why not two
 
-Value: `ingress_intern` — a full `https://…` URL.
+Value: `ingress` — a full `https://…` URL.
 Owner: **@navikt/teammelosys**
 
-One hostname, on `intern.dev.nav.no`. It feeds `spec.ingresses`.
+One hostname, on `ansatt.nav.no`. It feeds `spec.ingresses`.
 
 It is used a second time, and the second use is the one that bites.
 `MUNINN_ALLOWED_ORIGINS` is **derived** from it in `nais/app.yaml`
-(`value: "{{ ingress_intern }}"`), and that variable stops the pod in two
+(`value: "{{ ingress }}"`), and that variable stops the pod in two
 different ways:
 
 - an authenticating mode **refuses to boot** on an empty value, and
@@ -147,44 +147,48 @@ hostname; the origin list follows from it. That is also why the derivation
 stays even though it now names a single host: the day a second ingress returns,
 the list follows it rather than being remembered.
 
-### `ansatt.dev.nav.no` was served, and was dropped on measurement
+### `ansatt.nav.no` and the group gate — check once after the first deploy
 
-An earlier revision served both domains, arguing from `melosys-console`. Two
-things turned up on 2026-09-12, the first day this ran in a cluster:
+The dev deployment (`melosys-muninn-q2`, tenant `trygdeetaten.no`) served only
+`intern.dev.nav.no`, and dropped `ansatt.dev.nav.no` on 2026-09-12 after
+measuring it. The prod deployment serves `ansatt.nav.no` with an app
+registration in tenant `nav.no` and a group of its own. The measurement still
+applies, so the question it raised has to be answered once in prod:
 
-1. **The precedent is thinner than it reads.** Searching all of `navikt`,
-   `ansatt.dev.nav.no` appears in exactly one Melosys file — one line in
-   `melosys-console/nais/vars-q2.json`. No other Melosys workload serves that
-   domain.
-2. **The group gate may not apply there.** `ansatt.dev.nav.no` runs wonderwall
-   in **SSO mode**: a single centralised OIDC client (`ea1738f8-…`, tenant
-   `nav.no` = `62366534-…`) authenticates every app on the domain, and the
-   individual app's registration does not take part in that login. This app's
-   registration is in `trygdeetaten.no` (`966ac572-…`), so presenting a
-   trygdeetaten account there answers `AADSTS500213`, and a `nav.no` account
-   authenticates against a client that knows nothing of the group below.
+- **The domain has its own login in front of the sidecar.** On
+  `ansatt.dev.nav.no`, `GET /api/live` answered `302` to the domain's
+  `/oauth2/login` while the same path answered `200` on `intern.dev.nav.no`,
+  with identical `autoLoginIgnorePaths`. That is wonderwall in **SSO mode**: a
+  single centralised OIDC client (`ea1738f8-…`, tenant `nav.no` =
+  `62366534-…`) authenticates every app on the domain. Prod answers the same
+  way, for every host on the domain, including one that does not exist
+  (measured 2026-10-05). So the `302` proves nothing about this app, and
+  `scripts/deploy.sh` reports the ingress as unchecked rather than accepting
+  it.
+- **The group gate may not take part in that login.** The app's own
+  registration — and with it `allowAllUsers: false` and the group — is not the
+  client the domain logs in with. Moving the registration to `nav.no` removes
+  the tenant mismatch that answered `AADSTS500213` in dev; it does not make the
+  app's registration the domain's client.
 
 §2 states the premise this deployment rests on: **muninn has no in-app login
 allowlist, so the sidecar group is the only thing deciding who may reach the
-app at all.** That premise is verified on `intern.dev.nav.no`. On the SSO
-domain it is in doubt, and a door that may be wider than the plan believes is
-not something to ship in front of colleague chat content.
+app at all.** Measured in dev: the tenants, the shared client, and that
+`melosys-console-q2` hits the identical front door. Documented, not measured:
+that SSO mode uses one client for the whole realm (`nais/wonderwall`,
+`docs/architecture.md`). **Inferred, and NOT verified**: whether the group
+gates that domain.
 
-**What is measured and what is not.** Measured: the tenants, the shared client,
-and that `melosys-console-q2` hits the identical front door. Documented, not
-measured: that SSO mode uses one client for the whole realm
-(`nais/wonderwall`, `docs/architecture.md`). **Inferred, and NOT verified**:
-that the group therefore does not gate that domain.
-
-**The test that settles it** costs one login — have someone with a `nav.no`
-account who is **not** a member of the group open the ansatt host and see
-whether they reach the app. Re-adding the ingress afterwards is one commit:
-restore the key in both vars files, both manifests, and the derivation above.
+**The test that settles it** costs one login: have someone with a `nav.no`
+account who is **not** a member of the group open the app and see whether they
+reach it. If they do, the group is not the gate on this domain, and either the
+ingress moves to `intern.nav.no` or muninn gets an in-app check on the
+`groups` claim.
 
 ## 5. Admin identities — a namespace secret, not a variable
 
 Value: **none in this repo.** `MUNINN_ADMIN_IDENTS` comes from the nais secret
-named by `admin_secret` in `nais/vars-q2.json`. See §10 for creating it.
+named by `admin_secret` in `nais/vars.json`. See §10 for creating it.
 Owner: **@navikt/teammelosys**
 
 This used to be `admin_oids` in the vars file. It is the one *value* in this
@@ -239,7 +243,7 @@ already carries them and the pod crash-loops. But the actor matters just as
 much as the command: if anything other than the app user runs it, that role owns
 all 33 of `init.sql`'s tables and the pod gets *permission denied* at first
 query, which reads as a code bug rather than a schema one. Verified after the
-fact here: 33 tables, all owned by `melosys-muninn-q2`.
+fact on the dev deployment: 33 tables, all owned by its app user.
 
 That constraint is what decides *how* you run it. The app user's credentials are
 in the nais-generated `google-sql-<app>` secret, which the team cannot read, so
@@ -361,7 +365,7 @@ Two things still have to exist outside this repo.
 - **The team's registry and deploy identity.** `melosys-console`'s precedent is
   `europe-north1-docker.pkg.dev/nais-management-233d/<team>`; the action derives
   that path itself from the `team` input, which the workflow reads out of
-  `vars-q2.json` rather than hardcoding — a hardcoded copy beside the file's own
+  `vars.json` rather than hardcoding — a hardcoded copy beside the file's own
   `team` value would push to one team's GAR and label the app with another.
   Nothing here needs a token: the workflow declares `id-token: write` at
   **workflow** level and `nais/login` federates. ⚠️ That is also why there is
@@ -408,16 +412,16 @@ Two properties of that pipeline worth knowing before someone "simplifies" them:
 
 ## 10. The `MUNINN_ADMIN_IDENTS` secret
 
-Value: a Kubernetes secret **in the `dev-gcp` cluster**, in the namespace, named by `admin_secret` in
-`nais/vars-q2.json` (`melosys-muninn-q2` — **the app name**, which is the
+Value: a Kubernetes secret **in the `prod-gcp` cluster**, in the namespace, named by `admin_secret` in
+`nais/vars.json` (`melosys-muninn` — **the app name**, which is the
 team's existing pattern: `melosys-console-q2` mounts a secret of its own name),
 carrying **one key, spelled exactly `MUNINN_ADMIN_IDENTS`**, whose value is the
 comma-separated oid list from §5.
 Owner: **@navikt/teammelosys**
 
-An earlier revision named it `melosys-muninn-q2-admin-idents`, on the theory
+An earlier revision named it `<app>-admin-idents`, on the theory
 that nais reserves the app name for its own generated secrets. It does not —
-those are prefixed (`azure-melosys-muninn-q2-…`) — and a second naming
+those are prefixed (`azure-melosys-muninn-…`) — and a second naming
 convention for one team is a cost with no benefit. One secret per app, keys
 inside.
 
@@ -431,12 +435,13 @@ envFrom:
 
 Three things about it, each of which has a distinct failure:
 
-- **The environment is not free either, and "development" is ambiguous.** NAV
-  has `dev-gcp` **and** `dev-fss`, NAIS Console offers both, and secrets do not
-  cross clusters. A secret created in `dev-fss` with a perfect name and a
-  perfect key is invisible to this pod, which fails exactly as if it did not
-  exist — `CreateContainerConfigError`, no application log. Measured
-  2026-09-12, and it cost a deploy cycle.
+- **The environment is not free either.** NAV has `prod-gcp` **and**
+  `prod-fss` (and the same pair in dev), NAIS Console offers all of them, and
+  secrets do not cross clusters. A secret created in the wrong one with a
+  perfect name and a perfect key is invisible to this pod, which fails exactly
+  as if it did not exist — `CreateContainerConfigError`, no application log.
+  Measured 2026-09-12 with `dev-fss`, and it cost a deploy cycle. The dev
+  secret does not follow the app to `prod-gcp`; create it there.
 - **The key name is not free.** `envFrom` injects a secret's keys verbatim as
   environment variables, so a key called `admin_oids` or `ADMIN_IDENTS` produces
   a pod with no `MUNINN_ADMIN_IDENTS` at all.
@@ -460,9 +465,9 @@ file half of this change (`admin_oids` gone, `envFrom` in).
 Not a prerequisite for the pod: without it, chat works and the wiki is absent.
 
 **What it is.** A read-only wiki at
-`https://melosys-muninn-q2.intern.dev.nav.no/wiki?wiki=melosys-felles`. One
+`https://melosys-muninn.ansatt.nav.no/wiki?wiki=melosys-felles`. One
 curator copies pages into the private GCS bucket `felles_wiki_bucket`
-(`nais/vars-q2.json`); the pod mirrors the bucket into `/tmp/wikis/melosys-felles`
+(`nais/vars.json`); the pod mirrors the bucket into `/tmp/wikis/melosys-felles`
 every ~2 minutes and serves that copy to every team member who can reach the
 pod. `nais/app.yaml` declares the bucket, the four `WIKI_*` variables and the
 `storage.googleapis.com` egress entry, and explains each. The deployed muninn
@@ -549,11 +554,11 @@ then fix the local copy, then check the URL returns no page.
    public in this repo, and bucket names are global:
 
    ```bash
-   kubectl get storagebucket melosys-felles-wiki-q2 -n teammelosys   # READY True, UpToDate
-   gcloud storage buckets describe gs://melosys-felles-wiki-q2 --raw --format='value(projectNumber)'
+   kubectl get storagebucket melosys-felles-wiki -n teammelosys   # READY True, UpToDate
+   gcloud storage buckets describe gs://melosys-felles-wiki --raw --format='value(projectNumber)'
    ```
 
-   The number must equal `felles_wiki_project_number` in `nais/vars-q2.json`.
+   The number must equal `felles_wiki_project_number` in `nais/vars.json`.
    The mirror checks the same thing and refuses a bucket owned by another
    project, but nothing stops the curator's own upload going to it.
 3. **Prove write access with a real publish of a harmless page** (not a dry
@@ -573,7 +578,7 @@ then fix the local copy, then check the URL returns no page.
    on this bucket only:
 
    ```bash
-   gcloud storage buckets add-iam-policy-binding gs://melosys-felles-wiki-q2 \
+   gcloud storage buckets add-iam-policy-binding gs://melosys-felles-wiki \
      --member=user:<curator e-mail> --role=roles/storage.objectUser
    ```
 
@@ -584,7 +589,7 @@ then fix the local copy, then check the URL returns no page.
    refusals use the `WIKI_BUCKET_MIRRORS` spelling, so match both:
 
    ```bash
-   kubectl logs -n teammelosys deploy/melosys-muninn-q2 | grep -iE "bucket[ _]mirror"
+   kubectl logs -n teammelosys deploy/melosys-muninn | grep -iE "bucket[ _]mirror"
    ```
 
    Expect `Wiki bucket mirrors started: 1, every 120000 ms …`, then
@@ -604,8 +609,8 @@ the `emptyDir`, and the mirror adopts the files already there.
 
 ## Not prerequisites, but decided
 
-- **v1 stops at dev-gcp.** Prod carries a personopplysninger decision that is not
-  an engineering call.
+- **prod-gcp, since 2026-10.** v1 ran in dev-gcp as `melosys-muninn-q2`.
+  Retention of colleague chat content is still open; see `SECURITY.md`.
 - **Chat-only.** No huginn on nais in v1, so the bot has no knowledge tools and
   its persona says so. See `bot-folder-notes.md` §4.
 - **One replica, `Recreate`.** A correctness constraint, not capacity — see the

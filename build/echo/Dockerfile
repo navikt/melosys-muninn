@@ -4,7 +4,7 @@
 # pushes it to the team GAR and hands the digest-pinned reference straight to
 # nais/deploy. It is NOT built by .github/workflows/deploy.yml, which builds
 # MUNINN at a pinned ref with this repo's bot folder overlaid and refuses to run
-# while any REPLACE_ME survives in vars-q2.json — still the state of the world
+# while any REPLACE_ME survives in vars.json — still the state of the world
 # when step zero runs. The two have nothing in common but a registry.
 #
 # It must land in an ALLOWED registry — nais will not pull an arbitrary public

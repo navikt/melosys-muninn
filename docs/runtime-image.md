@@ -114,7 +114,7 @@ the workflow's. Explain a difference per CVE, not in total.
 `kubectl exec … -- sh` fails: the image has no shell. Run bun instead:
 
 ```sh
-kubectl exec -n teammelosys deploy/melosys-muninn-q2 -c melosys-muninn-q2 -- \
+kubectl exec -n teammelosys deploy/melosys-muninn -c melosys-muninn -- \
   bun -e 'console.log(process.env.MUNINN_REF)'
 ```
 

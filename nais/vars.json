@@ -1,0 +1,28 @@
+{
+  "_comment": "Every REPLACE_ME below is a value only the team can supply — see docs/PREREQUISITES.md. The deploy workflow refuses to run while any of them survives, so a half-filled file fails loudly instead of deploying something wrong. NB the guard reads the VALUES of keys that do not start with an underscore, so a comment may say REPLACE_ME (this one does) — but a comment stored under a NORMAL key would refuse every deploy. Keep documentation under `_`-prefixed keys.",
+
+  "app_name": "melosys-muninn",
+  "namespace": "teammelosys",
+  "team": "teammelosys",
+
+  "_comment_ingresses": "ONE hostname, a full https:// URL. It feeds spec.ingresses, and MUNINN_ALLOWED_ORIGINS is DERIVED from it in app.yaml — there is deliberately no second variable to keep in step. `ansatt.nav.no` puts its own login in front of the sidecar; see docs/PREREQUISITES.md §4 for what that means for the group gate.",
+  "ingress": "https://melosys-muninn.ansatt.nav.no",
+
+  "tenant": "nav.no",
+  "group_muninn_bruker": "bdf0026f-251b-4a5e-86ea-bd7b24381abe",
+
+  "_comment_admins": "There is deliberately no `admin_oids` key: an oid is a stable personal identifier for a named human, and this repo is public. MUNINN_ADMIN_IDENTS comes from the nais secret named below, which somebody creates in the namespace out of band — see docs/PREREQUISITES.md §10. The secret is named after the APP, which is what melosys-console-q2 does (envFrom: [{secret: melosys-console-q2}]) — nais's own generated secrets are prefixed, e.g. azure-melosys-muninn-…, so there is nothing to collide with. The secret's KEY must be literally MUNINN_ADMIN_IDENTS; envFrom injects keys verbatim.",
+  "admin_secret": "melosys-muninn",
+
+  "_comment_vertex": "There is deliberately no `vertex_host` key. The egress host is DERIVED by the deploy workflow from gcp_project + vertex_region and passed to nais/deploy as a VAR — leave it out and it stays that way. Adding it back means either a REPLACE_ME the first run hard-fails on, or a hand-filled value the computed VAR silently overrides.",
+  "gcp_project": "teammelosys-prod-a472",
+  "vertex_region": "europe-north1",
+  "db_name": "muninn-db",
+  "_comment_db": "There is deliberately no `db_instance` key. The instance name is left unset in app.yaml so it defaults to the APP name, melosys-muninn. prod-gcp has its own GCP project, so no name here can collide with the earlier dev deployment.",
+  "db_tier": "db-custom-1-3840",
+
+  "_comment_felles_wiki": "The private GCS bucket behind the felles-wiki prototype. Bucket names are GLOBALLY unique across all of Google. The dev bucket was melosys-felles-wiki-q2; this name was checked free with `gcloud storage buckets describe` (404) on 2026-10-05, before nais created it. felles_wiki_project_number is what stops the pod mirroring a bucket somebody else took first. Used twice in app.yaml (gcp.buckets and WIKI_BUCKET_MIRRORS), and scripts/publiser-felles-wiki.ts defaults to the same name. The bucket holds page content; this repo never does. See docs/PREREQUISITES.md, \"Felles-wiki (prototype)\".",
+  "felles_wiki_bucket": "melosys-felles-wiki",
+  "_comment_felles_wiki_project_number": "The project NUMBER of gcp_project (teammelosys-prod-a472), read with `gcloud projects describe <gcp_project> --format='value(projectNumber)'`. Not secret. Feeds WIKI_BUCKET_MIRROR_PROJECT_NUMBER: the mirror refuses a bucket owned by any other project, because the bucket name above is public and bucket names are global. A string, digits only; deploy.yml checks the shape.",
+  "felles_wiki_project_number": "1001722955451"
+}

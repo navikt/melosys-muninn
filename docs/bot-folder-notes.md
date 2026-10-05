@@ -107,7 +107,7 @@ without which Vertex answers `400`. It is no longer an open question: measured
 that way in git **on purpose**. The deploy workflow builds it from `gcp_project`
 and `vertex_region` and `jq`-assigns it into the copy of this folder it overlays
 into the build context, so the project and the region are stated once in
-`nais/vars-q2.json` and derived everywhere else.
+`nais/vars.json` and derived everywhere else.
 
 Two consequences:
 

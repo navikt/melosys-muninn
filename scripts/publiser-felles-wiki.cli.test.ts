@@ -369,11 +369,11 @@ describe("utløpt gcloud-innlogging", () => {
 });
 
 describe("argumenter og bøtte", () => {
-  test("tom FELLES_WIKI_BUCKET faller tilbake til vars-q2.json", () => {
+  test("tom FELLES_WIKI_BUCKET faller tilbake til vars.json", () => {
     skriv("a.md", "# A\n");
     const r = kjør(["--dry-run", rot, "a.md"], { FELLES_WIKI_BUCKET: "" });
     expect(r.kode).toBe(0);
-    expect(r.ut).toContain("gs://melosys-felles-wiki-q2/a.md");
+    expect(r.ut).toContain("gs://melosys-felles-wiki/a.md");
   });
 
   test("-- skiller flagg fra relPath", () => {
