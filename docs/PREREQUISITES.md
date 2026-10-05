@@ -160,8 +160,11 @@ applies, so the question it raised has to be answered once in prod:
   `/oauth2/login` while the same path answered `200` on `intern.dev.nav.no`,
   with identical `autoLoginIgnorePaths`. That is wonderwall in **SSO mode**: a
   single centralised OIDC client (`ea1738f8-…`, tenant `nav.no` =
-  `62366534-…`) authenticates every app on the domain. Expect the same `302`
-  in prod; `scripts/deploy.sh` accepts it.
+  `62366534-…`) authenticates every app on the domain. Prod answers the same
+  way, for every host on the domain, including one that does not exist
+  (measured 2026-10-05). So the `302` proves nothing about this app, and
+  `scripts/deploy.sh` reports the ingress as unchecked rather than accepting
+  it.
 - **The group gate may not take part in that login.** The app's own
   registration — and with it `allowAllUsers: false` and the group — is not the
   client the domain logs in with. Moving the registration to `nav.no` removes

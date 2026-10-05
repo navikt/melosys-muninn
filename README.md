@@ -122,9 +122,11 @@ today, so the first deploy will name a SHA.
 
 From a laptop, `make deploy` does the whole round: it resolves muninn
 `main` to a SHA, checks the upstream pin before dispatching, watches the run
-and then checks that the deployment's `MUNINN_REF` is that SHA and
-`/api/live` answers through the ingress (200, or on `ansatt.nav.no` the
-domain's own 302 to its login). `make deploy-sjekk` runs only the checks. To
+and then checks that the deployment's `MUNINN_REF` is that SHA and that the
+pod is ready. The ingress itself cannot be checked from outside on
+`ansatt.nav.no`: the domain answers every host with its own login, so the
+script says so and you open `/chat` in a browser. `make deploy-sjekk` runs
+only the checks. To
 deploy a specific tag or SHA, run `scripts/deploy.sh <tag|sha>` (prefix
 `DRY_RUN=1` to check only); the make targets take no ref. It needs `gh`, `jq`,
 `kubectl` on context `prod-gcp` and naisdevice.
@@ -148,6 +150,11 @@ project owns the quota.
   a single shared SSO client ahead of the sidecar, so whether this app's group
   gate takes part in the login has to be checked once after the first deploy —
   `docs/PREREQUISITES.md` §4 has the test.
+- **The dev deployment is not managed from here any more.** `melosys-muninn-q2`
+  in dev-gcp, its Cloud SQL instance (colleague chat content), the
+  `melosys-felles-wiki-q2` bucket and its admin secret keep running until
+  someone deletes them. Pages in the dev bucket are not copied to the prod one;
+  republish them with `scripts/publiser-felles-wiki.ts`.
 - **Chat, plus one read-only wiki.** `MUNINN_PROFILE=nais` drops fourteen
   route groups; the plans board, the capture verticals and the logs page are
   not registered. What is left is `/chat`, the operator dashboard, two health

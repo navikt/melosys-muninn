@@ -84,9 +84,9 @@ refuses while any `REPLACE_ME` survives in `vars.json`, and `gcp_project` /
 `step-zero.yml` reads `vars-step-zero.json` instead, which carries only what
 §1–§4 already bought.
 
-**The seven values in `vars-step-zero.json` are a subset of `vars.json`, and
+**The six values in `vars-step-zero.json` are a subset of `vars.json`, and
 must be identical in both files** — `app_name`, `namespace`, `team`, `tenant`,
-`group_muninn_bruker` and the two ingresses. Nothing compares the two files for
+`group_muninn_bruker` and `ingress`. Nothing compares the two files for
 you; they are separate precisely so step zero need not wait on `gcp_project` and
 `vertex_region`, and the cost of that is a copy nobody checks. Get one wrong and
 step zero proves the upgrade for a different app than the one that is deployed.

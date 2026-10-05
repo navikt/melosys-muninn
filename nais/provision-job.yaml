@@ -21,9 +21,10 @@
 # Apply nais/provision-netpol.yaml alongside it, or the connection dies as
 # CONNECT_TIMEOUT with no firewall in sight. Delete both when finished.
 #
-# The sqeletor secret's suffix is generated per instance and differs between
-# clusters: read it with `kubectl get secret -n teammelosys | grep sqeletor-melosys-muninn`
-# and fill the REPLACE_ME below before applying.
+# Two values below are REPLACE_ME, and both are read from the running app's
+# Deployment, which the team may read (secrets it may not):
+#   image:   kubectl get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.containers[0].image}'
+#   secret:  kubectl get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.volumes[*].secret.secretName}' | tr ' ' '\n' | grep sqeletor
 apiVersion: nais.io/v1
 kind: Naisjob
 metadata:
@@ -32,7 +33,7 @@ metadata:
   labels:
     team: teammelosys
 spec:
-  image: europe-north1-docker.pkg.dev/nais-management-233d/teammelosys/melosys-muninn:2026.09.12-12.59-45079c9@sha256:f2d871954c5f80dfdf47521a578aa0cda1360947efec96a8a5614588541f4231
+  image: REPLACE_ME_image_from_the_running_deployment
   command:
     - bun
     - db/provision.ts

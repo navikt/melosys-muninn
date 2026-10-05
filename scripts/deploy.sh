@@ -120,15 +120,23 @@ echo "workflowen er grønn"
 DEPLOYED=$(deployed_ref) || fail "workflowen er grønn ($RUN_URL), men MUNINN_REF fra deployment-en kunne ikke leses. Ikke start på nytt; sjekk med kubectl når klyngen svarer"
 [ "$DEPLOYED" = "$SHA" ] || fail "workflowen er grønn ($RUN_URL), men deployment-en har MUNINN_REF=$DEPLOYED, forventet $SHA. Kjørte en annen deploy samtidig? Ikke start på nytt før du har sjekket"
 echo "deployment-en kjører muninn $SHA"
-# ansatt.nav.no har en egen innlogging foran sidecaren, så /api/live svarer
-# 302 til /oauth2/login på selve domenet (ikke appens vertsnavn) selv om
-# podden er frisk (målt på
-# ansatt.dev.nav.no 2026-09-12, docs/step-zero-websocket.md). Den 302-en kommer
-# ikke fra podden og beviser ingenting om den; MUNINN_REF-sjekken over gjør det.
+# Podden selv: minst én oppdatert replika er klar for denne generasjonen.
+READY=$(kubectl --context "$CONTEXT" --request-timeout=10s \
+  get --raw "/apis/apps/v1/namespaces/$NAMESPACE/deployments/$APP" \
+  | jq -r '(.status.observedGeneration // 0) >= .metadata.generation and (.status.updatedReplicas // 0) >= 1 and (.status.readyReplicas // 0) >= 1') \
+  || fail "workflowen er grønn ($RUN_URL), men status fra deployment-en kunne ikke leses. Ikke start på nytt; sjekk med kubectl når klyngen svarer"
+[ "$READY" = true ] || fail "workflowen er grønn ($RUN_URL), men deployment-en har ingen klar, oppdatert replika. Sjekk poden med kubectl"
+echo "podden er klar"
+
+# ansatt.nav.no har en egen innlogging foran appen: alle vertsnavn på domenet,
+# også et som ikke finnes, svarer 302 til /oauth2/login på selve domenet (målt
+# 2026-10-05). Der kan ingressen ikke sjekkes uten innlogging, og skriptet
+# sier det i stedet for å godta 302-en som bevis.
 DOMENE=${INGRESS#https://*.}
 LIVE=$(curl -s -m 10 -o /dev/null -w '%{http_code} %{redirect_url}' "$INGRESS/api/live") || true
 case "$LIVE" in
   "200 "*) echo "$INGRESS/api/live: 200" ;;
-  "302 https://$DOMENE/oauth2/login"*) echo "$INGRESS/api/live: 302 til domenets innlogging (ventet på ansatt.nav.no; podden er bekreftet via MUNINN_REF)" ;;
+  "302 https://$DOMENE/oauth2/login" | "302 https://$DOMENE/oauth2/login?"*)
+    echo "  NB: $DOMENE svarer med sin egen innlogging før appen, så ingressen er IKKE sjekket. Åpne $INGRESS/chat i nettleseren" ;;
   *) fail "workflowen er grønn ($RUN_URL), men $INGRESS/api/live svarte '$LIVE'" ;;
 esac

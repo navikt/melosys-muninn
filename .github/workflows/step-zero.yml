@@ -8,7 +8,7 @@ name: step-zero
 # WHY THIS IS A SECOND WORKFLOW RATHER THAN A HAND-RUN COMMAND. An earlier
 # draft of the runbook told the operator to apply the stub by hand:
 #
-#     RESOURCE=nais/step-zero/stub.yaml VARS=... CLUSTER=dev-gcp nais/deploy
+#     RESOURCE=nais/step-zero/stub.yaml VARS=... CLUSTER=<cluster> nais/deploy
 #
 # That is not runnable and never was. `nais/deploy` is a GitHub Action path
 # (nais/deploy/actions/deploy@v2, as deploy.yml uses it), not a binary; a shell
