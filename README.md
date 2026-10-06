@@ -126,7 +126,8 @@ and then checks that the deployment's `MUNINN_REF` is that SHA and that the
 pod is ready. The ingress itself cannot be checked from outside on
 `ansatt.nav.no`: the domain answers every host with its own login, so the
 script says so and you open `/chat` in a browser. `make deploy-sjekk` runs
-only the pre-dispatch checks (the ref and the upstream pin) and starts nothing.
+only the pre-dispatch checks — the ref, the upstream pin, and a read of the
+running deployment's `MUNINN_REF` — and starts nothing.
 To
 deploy a specific tag or SHA, run `scripts/deploy.sh <tag|sha>` (prefix
 `DRY_RUN=1` to check only); the make targets take no ref. It needs `gh`, `jq`,

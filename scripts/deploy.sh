@@ -121,12 +121,14 @@ echo "workflowen er grønn"
 # nais/deploy venter selv på utrullingen, så en grønn kjøring er en ferdig utrulling.
 # Én lesing: SHA-en og klar-sjekken gjelder samme generasjon.
 DEP=$(deployment_json) || fail "workflowen er grønn ($RUN_URL), men deployment-en kunne ikke leses. Ikke start på nytt; sjekk med kubectl når klyngen svarer"
+printf '%s' "$DEP" | jq -e 'type == "object"' > /dev/null 2>&1 \
+  || fail "workflowen er grønn ($RUN_URL), men svaret fra klyngen er ikke en deployment. Ikke start på nytt; sjekk med kubectl"
 DEPLOYED=$(printf '%s' "$DEP" | ref_of) || fail "workflowen er grønn ($RUN_URL), men deployment-en har ingen MUNINN_REF. Ikke start på nytt før du har sjekket"
 [ "$DEPLOYED" = "$SHA" ] || fail "workflowen er grønn ($RUN_URL), men deployment-en har MUNINN_REF=$DEPLOYED, forventet $SHA. Kjørte en annen deploy samtidig? Ikke start på nytt før du har sjekket"
 echo "deployment-en kjører muninn $SHA"
 # Podden selv: minst én oppdatert replika er klar for denne generasjonen.
 READY=$(printf '%s' "$DEP" \
-  | jq -r '(.status.observedGeneration // 0) >= .metadata.generation and (.status.updatedReplicas // 0) >= 1 and (.status.readyReplicas // 0) >= 1') \
+  | jq -r '(.metadata.generation | type) == "number" and (.status.observedGeneration // 0) >= .metadata.generation and (.status.updatedReplicas // 0) >= 1 and (.status.readyReplicas // 0) >= 1') \
   || fail "workflowen er grønn ($RUN_URL), men status fra deployment-en kunne ikke tolkes. Sjekk med kubectl"
 [ "$READY" = true ] || fail "workflowen er grønn ($RUN_URL), men deployment-en har ingen klar, oppdatert replika. Sjekk poden med kubectl"
 echo "podden er klar"
