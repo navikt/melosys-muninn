@@ -5,7 +5,8 @@ name: deploy
 # pushes it to the team's GAR, checks and scans the pushed digest, and deploys
 # that digest to prod-gcp. Nothing in the public repo is edited: the only things
 # this workflow changes in the checkout are `bots/` (replaced wholesale), one
-# added file (`nais-entrypoint.ts`) and one line removed from `.dockerignore`.
+# added file (`nais-entrypoint.ts`), one added directory (`nais-skanner/`, the
+# answer scanner) and one line removed from `.dockerignore`.
 #
 # The ref is an INPUT with no default that floats. A deploy should name the
 # muninn commit it shipped, and `main` is not a name — a rollback needs to be
@@ -439,6 +440,23 @@ jobs:
           cp deploy/build/nais-entrypoint.ts muninn/nais-entrypoint.ts || {
             echo "::error::could not copy build/nais-entrypoint.ts into the build context"; exit 1
           }
+          # The answer scanner (WIKI_ANSWER_SCANNER in nais/app.yaml): the
+          # adapter and the publish script it imports, in this repo's relative
+          # layout so `../scripts/publiser-felles-wiki.ts` resolves in the
+          # image. Refused if upstream ever ships a directory of that name,
+          # rather than merged into it.
+          if [ -e muninn/nais-skanner ]; then
+            echo "::error::muninn already has a nais-skanner/ — pick another overlay path for the answer scanner"; exit 1
+          fi
+          mkdir -p muninn/nais-skanner/build muninn/nais-skanner/scripts || {
+            echo "::error::could not create muninn/nais-skanner in the build context"; exit 1
+          }
+          cp deploy/build/svar-skanner.ts muninn/nais-skanner/build/svar-skanner.ts || {
+            echo "::error::could not copy build/svar-skanner.ts into the build context"; exit 1
+          }
+          cp deploy/scripts/publiser-felles-wiki.ts muninn/nais-skanner/scripts/publiser-felles-wiki.ts || {
+            echo "::error::could not copy scripts/publiser-felles-wiki.ts into the build context"; exit 1
+          }
 
           # DERIVED, not a checked-in second copy. `nais/docker-build-push`
           # reads the ignore file at the CONTEXT root (./muninn/.dockerignore),
@@ -656,6 +674,30 @@ jobs:
             console.log(`length=${v?.length} ok=${ok}`);
             process.exit(ok ? 0 : 1);
           ' || { echo "::error::the embedding model did not produce a 384-dimensional vector offline, read-only, as UID 1069"; exit 1; }
+
+      # The answer scanner, at the path nais/app.yaml names, under the pod's
+      # constraints. muninn refuses every answer (503) when the module does not
+      # load or export scanAnswer, so a broken overlay would deploy green and
+      # show up only as answers that cannot be saved. The number is SYNTHETIC,
+      # built from the organisasjonsnummer check digit here.
+      - name: The answer scanner loads and refuses an organisasjonsnummer
+        env:
+          IMG: ${{ steps.docker-push.outputs.image }}
+        run: |
+          docker run --rm --network none --read-only --user 1069:1069 --entrypoint bun "$IMG" -e '
+            const { scanAnswer } = await import("/app/nais-skanner/build/svar-skanner.ts");
+            let nr = "";
+            for (let p = 91234567; !nr; p++) {
+              const d = [...String(p)].map(Number);
+              const k = 11 - ([3, 2, 7, 6, 5, 4, 3, 2].reduce((a, w, i) => a + w * d[i], 0) % 11);
+              if (k !== 10) nr = String(p) + (k === 11 ? 0 : k);
+            }
+            const ren = scanAnswer("Ja, det stemmer.\nZ990001 kan svare.");
+            const avvist = scanAnswer("orgnr: " + nr);
+            console.log(JSON.stringify({ ren, avvist }));
+            const ok = Array.isArray(ren) && ren.length === 0 && Array.isArray(avvist) && avvist.length === 1 && !avvist[0].reason.includes(nr);
+            process.exit(ok ? 0 : 1);
+          ' || { echo "::error::/app/nais-skanner/build/svar-skanner.ts did not load, or did not pass clean text and refuse a masked organisasjonsnummer"; exit 1; }
 
       # The ENTRYPOINT itself, in the pushed artifact: with no reachable
       # database it must refuse with require-provisioned's "could not ask"

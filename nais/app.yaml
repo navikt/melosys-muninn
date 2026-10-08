@@ -330,3 +330,13 @@ spec:
     # shows. Not secret: it is the number of gcp_project.
     - name: WIKI_BUCKET_MIRROR_PROJECT_NUMBER
       value: "{{ felles_wiki_project_number }}"
+    # The answer scanner for <Question> cards: the adapter
+    # build/svar-skanner.ts and the publish script it imports, overlaid into
+    # the image by the deploy workflow, so answers go through the same scanner
+    # as published pages. muninn calls its scanAnswer on every answer body
+    # before storing it, and on this profile refuses all answers when this
+    # variable is unset. Answers stay OFF here regardless: WIKI_ANSWER_WIKIS
+    # and WIKI_ANSWER_OWNER are deliberately not set until the retention
+    # question is settled.
+    - name: WIKI_ANSWER_SCANNER
+      value: "/app/nais-skanner/build/svar-skanner.ts"

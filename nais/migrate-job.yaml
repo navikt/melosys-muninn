@@ -1,0 +1,52 @@
+# One-shot `bun db/migrate.ts` for melosys-muninn — see docs/db-setup.md,
+# "A muninn ref that adds a table".
+#
+# WHY THIS EXISTS. The entrypoint runs db/require-provisioned.ts BEFORE
+# db/migrate.ts, and that check refuses a database missing any table
+# db/init.sql declares. A muninn migration that adds a table (082,
+# wiki_answers, is the first) therefore stops the new pod before the
+# entrypoint's own migrate step can create it: the pod crash-loops until this
+# job has run with the NEW image.
+#
+# Same wiring as nais/provision-job.yaml, for the same reasons: it runs AS THE
+# APP USER through the nais-generated `google-sql-` secret (a table created by
+# anyone else is owned by them, and the pod gets permission-denied), and it
+# declares no gcp.sqlInstances (that would create a second SQL user). Apply
+# nais/migrate-netpol.yaml alongside it, or the connection dies as
+# CONNECT_TIMEOUT. Delete both when finished.
+#
+# db/migrate.ts reads DB_URL itself, since a `command:` replaces the entrypoint
+# that would otherwise export DATABASE_URL from it. It prints `Database:
+# host:port/db` first. Swap the last argument out for `--status` to see what
+# is pending without writing anything.
+#
+# Two values below are REPLACE_ME, read from the app's Deployment, which the
+# team may read. After the app rollout the Deployment already names the NEW
+# image, even while its pod crash-loops:
+#   image:   kubectl --context prod-gcp get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.containers[?(@.name=="melosys-muninn")].image}'
+#   secret:  kubectl --context prod-gcp get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.volumes[*].secret.secretName}' | tr ' ' '\n' | grep sqeletor
+apiVersion: nais.io/v1
+kind: Naisjob
+metadata:
+  name: melosys-muninn-migrate
+  namespace: teammelosys
+  labels:
+    team: teammelosys
+spec:
+  image: REPLACE_ME_image_from_the_running_deployment
+  command:
+    - bun
+    - db/migrate.ts
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  envFrom:
+    - secret: google-sql-melosys-muninn
+  filesFrom:
+    - secret: sqeletor-melosys-muninn-REPLACE_ME
+      mountPath: /var/run/secrets/nais.io/sqlcertificate
+  resources:
+    limits:
+      memory: 1024Mi
+    requests:
+      cpu: 200m
+      memory: 512Mi

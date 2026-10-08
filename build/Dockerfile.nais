@@ -3,7 +3,8 @@
 # Replaces muninn's own Dockerfile for this deployment only. Compose keeps
 # building upstream's. The build context is the muninn checkout after the
 # workflow's overlay: this repo's bots/ and build/nais-entrypoint.ts are copied
-# in, and `bots/` is stripped from .dockerignore.
+# in, the answer scanner lands under nais-skanner/, and `bots/` is stripped
+# from .dockerignore.
 #
 # Both base images are MIRRORS in the team's GAR, pinned by digest. CI has no
 # dhi.io credential; see docs/runtime-image.md for the mirror command and for
@@ -36,6 +37,11 @@ COPY tsconfig.json ./
 # overlay, so a missing bots/ fails the build here.
 COPY bots ./bots/
 COPY nais-entrypoint.ts ./
+# The answer scanner muninn loads through WIKI_ANSWER_SCANNER (nais/app.yaml):
+# build/svar-skanner.ts and the publish script it imports, in the same relative
+# layout as this repo. Its own directory, so it cannot collide with muninn's
+# scripts/.
+COPY nais-skanner ./nais-skanner/
 
 # --- runtime: no shell, no package manager, non-root (65532) ---
 FROM europe-north1-docker.pkg.dev/nais-management-233d/teammelosys/dhi-bun:1.4.2-debian13.7@sha256:be53b056dc651b7c83471e90fdb69c9614c83d5860e21b944df436bc6d86b5ba

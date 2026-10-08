@@ -262,6 +262,10 @@ can run against a private-IP instance.
 Sequencing note: the instance does not exist until the manifest is applied, so
 either deploy once expecting a crash-loop, or scale to zero replicas first.
 
+Later deploys: a muninn ref whose migration adds a table crash-loops on rollout
+until `nais/migrate-job.yaml` has run with the new image. `db-setup.md`, "A
+muninn ref that adds a table", has the order.
+
 ## 7. The model — decided, with one procurement question left
 
 Owner: **@navikt/teammelosys** · Decision: **Team KI** (the region and model half is answered)

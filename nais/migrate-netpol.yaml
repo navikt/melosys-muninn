@@ -1,0 +1,26 @@
+# Egress to the Cloud SQL instance's IPs for the migration job
+# (nais/migrate-job.yaml). The same policy as nais/provision-netpol.yaml, which
+# explains why the job needs one; this one selects the migration job's pods,
+# which are labelled `app: melosys-muninn-migrate`.
+#
+# Copy every ipBlock the app's generated policy lists, one `- ipBlock:` entry
+# each: `kubectl get networkpolicy -n teammelosys
+# sql-melosys-muninn-melosys-muninn -o yaml`. Delete it with the job; it
+# references an instance IP and must not outlive it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sql-migrate-melosys-muninn
+  namespace: teammelosys
+  labels:
+    team: teammelosys
+spec:
+  podSelector:
+    matchLabels:
+      app: melosys-muninn-migrate
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: REPLACE_ME_sql_private_ip/32
