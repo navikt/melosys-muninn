@@ -437,3 +437,91 @@ describe("--fjern", () => {
     expect(kall().filter((k) => k.args[1] === "rm").map((k) => k.args.at(-1))).toEqual(["gs://felles-test/a.md"]);
   });
 });
+
+describe("datafiler en side viser", () => {
+  const SIDE = [
+    "---",
+    "title: Rapport",
+    "---",
+    "# Rapport",
+    '<CaseBoard src="../data/cases.yaml" />',
+    '<Query id="Q-1" csv="rapport-sql-resultat/Q-1.csv" sql="rapport-sql-resultat/Q-1.sql" />',
+    "```mdx",
+    '<Query id="eksempel" csv="i-kodeblokk.csv" />',
+    "```",
+    "",
+  ].join("\n");
+  const CSV = "behandling,status,endret_av\n101,OK,Z990123\n";
+
+  test("siden lastes opp med filene den navngir, også i en søskenmappe; CSV-en uten identkolonnen", () => {
+    skriv("plans/rapport.mdx", SIDE);
+    skriv("data/cases.yaml", "- id: MELOSYS-1\n");
+    skriv("plans/rapport-sql-resultat/Q-1.csv", CSV);
+    skriv("plans/rapport-sql-resultat/Q-1.sql", "select 1;\n");
+    skriv("plans/i-kodeblokk.csv", "a\n1\n");
+    skriv("plans/rapport-sql-resultat/Q-2.csv", "ikke navngitt\n");
+    const r = kjør([rot, "plans/rapport.mdx"]);
+    expect(r.kode).toBe(0);
+    expect(destinasjoner()).toEqual([
+      "gs://felles-test/plans/rapport.mdx",
+      "gs://felles-test/data/cases.yaml",
+      "gs://felles-test/plans/rapport-sql-resultat/Q-1.csv",
+      "gs://felles-test/plans/rapport-sql-resultat/Q-1.sql",
+    ]);
+    const csv = opplastinger().find((k) => k.args.at(-1)!.endsWith("Q-1.csv"))!;
+    expect(csv.args).toContain("--content-type=text/csv; charset=utf-8");
+    expect(csv.stdin?.toString()).toBe("behandling,status\n101,OK\n");
+    expect(readFileSync(path.join(rot, "plans/rapport-sql-resultat/Q-1.csv"), "utf8")).toBe(CSV);
+    expect(r.ut).toContain("fjernet kolonne: endret_av (NAVident i 1 rad(er))");
+    expect(r.ut).toMatch(/4 lastet opp, 0 avvist/);
+  });
+
+  test("tørrkjøring viser hvilke kolonner som fjernes per fil, og laster ingenting opp", () => {
+    skriv("plans/rapport.mdx", SIDE);
+    skriv("data/cases.yaml", "- id: MELOSYS-1\n");
+    skriv("plans/rapport-sql-resultat/Q-1.csv", CSV);
+    skriv("plans/rapport-sql-resultat/Q-1.sql", "select 1;\n");
+    const r = kjør(["--dry-run", rot, "plans/rapport.mdx"]);
+    expect(r.kode).toBe(0);
+    expect(opplastinger()).toEqual([]);
+    expect(r.ut).toMatch(/OK {6}plans\/rapport-sql-resultat\/Q-1\.csv\n {4}fjernet kolonne: endret_av/);
+    expect(r.ut).toContain("vil laste opp gs://felles-test/plans/rapport-sql-resultat/Q-1.csv");
+    expect(r.ut).not.toContain("Z990123");
+  });
+
+  test("en YAML med NAVident avvises og lastes ikke opp; siden og de andre filene lastes opp", () => {
+    skriv("plans/rapport.mdx", SIDE);
+    skriv("data/cases.yaml", "- id: MELOSYS-1\n  eier: Z990123\n");
+    skriv("plans/rapport-sql-resultat/Q-1.csv", "a\n1\n");
+    skriv("plans/rapport-sql-resultat/Q-1.sql", "select 1;\n");
+    const r = kjør([rot, "plans/rapport.mdx"]);
+    expect(r.kode).toBe(1);
+    expect(destinasjoner()).not.toContain("gs://felles-test/data/cases.yaml");
+    expect(destinasjoner()).toContain("gs://felles-test/plans/rapport.mdx");
+    expect(r.ut).toMatch(/AVVIST  data\/cases\.yaml\n {4}avslag: data\/cases\.yaml:2: NAVident \*{5}23/);
+  });
+
+  test("en datafil oppgitt alene avvises; oppgitt sammen med siden som viser den, lastes den opp én gang", () => {
+    skriv("plans/rapport.mdx", SIDE);
+    skriv("data/cases.yaml", "- id: MELOSYS-1\n");
+    skriv("plans/rapport-sql-resultat/Q-1.csv", "a\n1\n");
+    skriv("plans/rapport-sql-resultat/Q-1.sql", "select 1;\n");
+    const alene = kjør(["--dry-run", rot, "plans/rapport-sql-resultat/Q-1.csv"]);
+    expect(alene.kode).toBe(1);
+    expect(alene.ut).toContain("bare sammen med en side som viser den");
+    const sammen = kjør([rot, "plans/rapport-sql-resultat/Q-1.csv", "plans/rapport.mdx"]);
+    expect(sammen.kode).toBe(0);
+    expect(destinasjoner().filter((d) => d!.endsWith("Q-1.csv"))).toHaveLength(1);
+  });
+
+  test("en avvist side tar med seg datafilene; en fil som mangler, er en advarsel på siden", () => {
+    skriv("plans/rapport.mdx", SIDE + `\n${FNR}\n`);
+    skriv("data/cases.yaml", "- id: MELOSYS-1\n");
+    skriv("plans/rapport-sql-resultat/Q-1.csv", "a\n1\n");
+    const r = kjør([rot, "plans/rapport.mdx"]);
+    expect(r.kode).toBe(1);
+    expect(opplastinger()).toEqual([]);
+    expect(r.ut).toContain("siden som viser filen, er avvist");
+    expect(r.ut).toContain("rapport-sql-resultat/Q-1.sql: filen finnes ikke");
+  });
+});

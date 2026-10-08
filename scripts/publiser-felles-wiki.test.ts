@@ -176,9 +176,17 @@ describe("sjekkSti", () => {
     }
   });
   test("uttrekk avvises med egen melding", () => {
-    for (const s of ["data.csv", "x/uttrekk.json", "ark.xlsx", "notat.txt"]) {
+    for (const s of ["x/uttrekk.json", "ark.xlsx", "notat.txt", "data.tsv"]) {
       expect(sjekkSti(s)).toContain("uttrekk");
     }
+  });
+  test("en datafil avvises alene, men tillates når en side viser den", () => {
+    for (const s of ["data.csv", "q/Q-1.sql", "cases.yaml", "cases.YML"]) {
+      expect(sjekkSti(s)).toContain("bare sammen med en side som viser den");
+      expect(sjekkSti(s, true)).toBeNull();
+    }
+    expect(sjekkSti("q/.skjult.csv", true)).toContain("skjult");
+    expect(sjekkSti("data.json", true)).toContain("uttrekk");
   });
   test("andre filtyper, skjulte filer og traversering avvises", () => {
     expect(sjekkSti("a.pdf")).toContain("ikke tillatt");
@@ -238,10 +246,11 @@ describe("vurderFil", () => {
     const abs = skriv("stille.mdx", "---\nsignal: none\n---\nx\n");
     expect(vurderFil(abs, "stille.mdx", false).avslag).toEqual(["siden er culled (`signal: none` eller wiki-signal=none)"]);
   });
-  test("csv avvises uten å bli lest", () => {
+  test("en csv ingen side viser, avvises uten å bli lest", () => {
     const abs = skriv("data.csv", `${FNR}\n`);
     const v = vurderFil(abs, "data.csv", false);
     expect(v.avslag).toHaveLength(1);
-    expect(v.avslag[0]).toContain("uttrekk");
+    expect(v.avslag[0]).toContain("bare sammen med en side som viser den");
+    expect(v.bytes).toBeUndefined();
   });
 });
