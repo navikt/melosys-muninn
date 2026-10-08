@@ -471,6 +471,21 @@ Three things about it, each of which has a distinct failure:
 It gates the **first deploy**, not the push: publishing the repo needs only the
 file half of this change (`admin_oids` gone, `envFrom` in).
 
+**A second key, `WIKI_ANSWER_GROUPS`** (optional, from muninn #662): the team
+roster for answer cards, as `fag=IDENT,IDENT;utvikler=IDENT,…` with NAV idents
+(not oids). A `<Question>` addressed to `fag` asks every member, and each answer
+shows its author's groups. It lives in this secret for the same reason as the
+admin list: a roster of NAV idents is personopplysninger, and the repo is
+public. Missing, the pod runs without groups; a malformed entry is dropped with
+a boot warning that names its position, never an ident. Add or change it with
+
+```sh
+kubectl patch secret melosys-muninn -n teammelosys --type merge \
+  -p "{\"stringData\":{\"WIKI_ANSWER_GROUPS\":\"$(cat <file>)\"}}"
+```
+
+and restart the pod through a deploy: `envFrom` is read at container start.
+
 ---
 
 ## Felles-wiki (prototype)
