@@ -680,8 +680,10 @@ jobs:
       # load or export scanAnswer, so a broken overlay would deploy green and
       # show up only as answers that cannot be saved. Both numbers are
       # SYNTHETIC, built from their check digits here. Probing both kinds
-      # catches an adapter that refuses only one of them, and the six-digit
-      # check catches a reason that leaks part of a number.
+      # catches an adapter that refuses only one of them. The leak check fails
+      # the step only when a reason contains a number's first six digits as
+      # one run; a reason that leaks only later digits, or the first six with
+      # spaces between them, passes it.
       - name: The answer scanner loads and refuses a fødselsnummer and an organisasjonsnummer
         env:
           IMG: ${{ steps.docker-push.outputs.image }}

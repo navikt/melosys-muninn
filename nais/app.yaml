@@ -333,8 +333,8 @@ spec:
     # The answer scanner for <Question> cards: the adapter
     # build/svar-skanner.ts and the publish script it imports, overlaid into
     # the image by the deploy workflow, so answers go through the same scanner
-    # as published pages. From the muninn ref that has the WIKI_ANSWER_SCANNER
-    # hook (RuneLind/muninn branch wiki-answers-felles-pod), muninn calls its
+    # as published pages. From the muninn ref that adds the
+    # WIKI_ANSWER_SCANNER hook, muninn calls its
     # scanAnswer on every answer body before storing it, and on this profile
     # refuses all answers when this variable is unset. An older muninn ref
     # ignores the variable. Answers stay OFF here regardless: WIKI_ANSWER_WIKIS

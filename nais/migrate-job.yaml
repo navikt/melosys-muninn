@@ -26,13 +26,11 @@
 # database). Read the log, delete the job, remove the last argument
 # (`--dry-run`), and apply it again to migrate.
 #
-# Two values below are REPLACE_ME. The image is the digest the deploy run
-# pushed: read `…@sha256:…` from the log of the run's "Pull the pushed image
-# by digest" step, so the job can run while the run's checks do and the old pod
-# still serves (docs/db-setup.md, "The order"). If the rollout has already
-# happened, the Deployment names the new image even while its pod
-# crash-loops. The secret is read from the Deployment, which the team may read:
-#   image (fallback, after the rollout):   kubectl --context prod-gcp get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.containers[?(@.name=="melosys-muninn")].image}'
+# Two values below are REPLACE_ME, both read from the Deployment, which the
+# team may read. Run the job after the rollout (docs/db-setup.md, "The
+# order"): the Deployment then names the new image even while its pod
+# crash-loops, and that image is the job's.
+#   image:   kubectl --context prod-gcp get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.containers[?(@.name=="melosys-muninn")].image}'
 #   secret:  kubectl --context prod-gcp get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.volumes[*].secret.secretName}' | tr ' ' '\n' | grep sqeletor
 apiVersion: nais.io/v1
 kind: Naisjob
@@ -42,7 +40,7 @@ metadata:
   labels:
     team: teammelosys
 spec:
-  image: REPLACE_ME_image_from_the_running_deployment
+  image: REPLACE_ME_image_from_the_deployment
   command:
     - bun
     - db/migrate.ts

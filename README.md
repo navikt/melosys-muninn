@@ -137,10 +137,11 @@ deploy a specific tag or SHA, run `scripts/deploy.sh <tag|sha>` (prefix
 `kubectl` on context `prod-gcp` and naisdevice.
 
 A muninn ref whose migration adds a table crash-loops on rollout until
-`nais/migrate-job.yaml` has run with the new image. Prod runs muninn
-`8ae738bf`, so the next deploy of a ref at or after 082 is missing two tables:
-`summary_factchecks` (079) and `wiki_answers` (082). `docs/db-setup.md` has
-the order, which runs the job before the rollout.
+`nais/migrate-job.yaml` has run with the new image, so expect a short outage.
+The last prod deploy shipped muninn `8ae738bf`, so the next deploy of a ref at
+or after 082 is missing two tables: `summary_factchecks` (079) and
+`wiki_answers` (082). `docs/db-setup.md` has the order: deploy, let the pod
+crash-loop, then run the job with the image the Deployment names.
 
 Before the first deploy, work through **`docs/PREREQUISITES.md`**. §1–§10 are
 ten items and each one alone makes the pod useless; §0 is not one of them, it
