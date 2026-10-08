@@ -338,8 +338,15 @@ spec:
     # answer body before storing it, and on this profile, with this variable
     # unset, refuses (503) every answer with a non-blank body; an answer that
     # is only a choice is stored unscanned. An older muninn ref
-    # ignores the variable. Answers stay OFF here regardless: WIKI_ANSWER_WIKIS
-    # and WIKI_ANSWER_OWNER are deliberately not set until the retention
-    # question is settled.
+    # ignores the variable. Answers stay OFF here until WIKI_ANSWER_WIKIS
+    # names melosys-felles.
     - name: WIKI_ANSWER_SCANNER
       value: "/app/nais-skanner/build/svar-skanner.ts"
+    # Retention (answer-cards plan D17, muninn #660): an answer is deleted 30
+    # days after it is exported and 90 days after its latest version when it
+    # never is; a redacted answer at the next hourly sweep. The page and its
+    # git history are the record. Digits only; 0 turns a rule off.
+    - name: WIKI_ANSWER_RETENTION_DAYS
+      value: "30"
+    - name: WIKI_ANSWER_UNEXPORTED_DAYS
+      value: "90"
