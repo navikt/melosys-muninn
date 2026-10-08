@@ -264,7 +264,7 @@ either deploy once expecting a crash-loop, or scale to zero replicas first.
 
 Later deploys: a muninn ref whose migration adds a table crash-loops on rollout
 until `nais/migrate-job.yaml` has run with the new image. `db-setup.md`, "A
-muninn ref that adds a table", has the order.
+muninn ref that adds a table", has the order that runs the job first.
 
 ## 7. The model — decided, with one procurement question left
 

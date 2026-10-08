@@ -445,7 +445,7 @@ jobs:
           # layout so `../scripts/publiser-felles-wiki.ts` resolves in the
           # image. Refused if upstream ever ships a directory of that name,
           # rather than merged into it.
-          if [ -e muninn/nais-skanner ]; then
+          if [ -e muninn/nais-skanner ] || [ -L muninn/nais-skanner ]; then
             echo "::error::muninn already has a nais-skanner/ — pick another overlay path for the answer scanner"; exit 1
           fi
           mkdir -p muninn/nais-skanner/build muninn/nais-skanner/scripts || {
@@ -678,26 +678,41 @@ jobs:
       # The answer scanner, at the path nais/app.yaml names, under the pod's
       # constraints. muninn refuses every answer (503) when the module does not
       # load or export scanAnswer, so a broken overlay would deploy green and
-      # show up only as answers that cannot be saved. The number is SYNTHETIC,
-      # built from the organisasjonsnummer check digit here.
-      - name: The answer scanner loads and refuses an organisasjonsnummer
+      # show up only as answers that cannot be saved. Both numbers are
+      # SYNTHETIC, built from their check digits here. Probing both kinds
+      # catches an adapter that refuses only one of them, and the six-digit
+      # check catches a reason that leaks part of a number.
+      - name: The answer scanner loads and refuses a fødselsnummer and an organisasjonsnummer
         env:
           IMG: ${{ steps.docker-push.outputs.image }}
         run: |
           docker run --rm --network none --read-only --user 1069:1069 --entrypoint bun "$IMG" -e '
             const { scanAnswer } = await import("/app/nais-skanner/build/svar-skanner.ts");
-            let nr = "";
-            for (let p = 91234567; !nr; p++) {
-              const d = [...String(p)].map(Number);
-              const k = 11 - ([3, 2, 7, 6, 5, 4, 3, 2].reduce((a, w, i) => a + w * d[i], 0) % 11);
-              if (k !== 10) nr = String(p) + (k === 11 ? 0 : k);
+            const mod11 = (d, w) => { const k = 11 - (w.reduce((a, x, i) => a + x * d[i], 0) % 11); return k === 11 ? 0 : k; };
+            let orgnr = "";
+            for (let p = 91234567; !orgnr; p++) {
+              const k = mod11([...String(p)].map(Number), [3, 2, 7, 6, 5, 4, 3, 2]);
+              if (k !== 10) orgnr = String(p) + k;
+            }
+            let fnr = "";
+            for (let ind = 500; !fnr; ind++) {
+              const d = [..."150385" + String(ind).padStart(3, "0")].map(Number);
+              const k1 = mod11(d, [3, 7, 6, 1, 8, 9, 4, 5, 2]);
+              const k2 = k1 === 10 ? 10 : mod11([...d, k1], [5, 4, 3, 2, 7, 6, 5, 4, 3, 2]);
+              if (k1 !== 10 && k2 !== 10) fnr = d.join("") + k1 + k2;
             }
             const ren = scanAnswer("Ja, det stemmer.\nZ990001 kan svare.");
-            const avvist = scanAnswer("orgnr: " + nr);
-            console.log(JSON.stringify({ ren, avvist }));
-            const ok = Array.isArray(ren) && ren.length === 0 && Array.isArray(avvist) && avvist.length === 1 && !avvist[0].reason.includes(nr);
+            const avvistOrg = scanAnswer("orgnr: " + orgnr);
+            const avvistFnr = scanAnswer("Saken gjelder " + fnr + " i dag.");
+            console.log(JSON.stringify({ ren, avvistOrg, avvistFnr }));
+            const grunner = [...avvistOrg, ...avvistFnr].map((a) => String(a?.reason));
+            const lekker = grunner.some((g) => g.includes(orgnr.slice(0, 6)) || g.includes(fnr.slice(0, 6)));
+            const ok = Array.isArray(ren) && ren.length === 0
+              && Array.isArray(avvistOrg) && avvistOrg.length === 1 && grunner[0].includes("organisasjonsnummer")
+              && Array.isArray(avvistFnr) && avvistFnr.length === 1 && grunner[1].includes("fødselsnummer")
+              && !lekker;
             process.exit(ok ? 0 : 1);
-          ' || { echo "::error::/app/nais-skanner/build/svar-skanner.ts did not load, or did not pass clean text and refuse a masked organisasjonsnummer"; exit 1; }
+          ' || { echo "::error::/app/nais-skanner/build/svar-skanner.ts did not load, or did not pass clean text and refuse both a fødselsnummer and an organisasjonsnummer with the number masked"; exit 1; }
 
       # The ENTRYPOINT itself, in the pushed artifact: with no reachable
       # database it must refuse with require-provisioned's "could not ask"

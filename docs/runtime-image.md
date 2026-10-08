@@ -72,6 +72,7 @@ every check against that digest. The deploy uses the same reference.
 | Binaries | `sh`, `bash`, `curl`, `ffmpeg` or `claude` is on `PATH`. |
 | Ownership | The image's own user (65532) can write any path under `/app`. |
 | Embedding | The model does not return a 384-dimensional vector with no network, a read-only root filesystem and UID 1069. |
+| Answer scanner | `/app/nais-skanner/build/svar-skanner.ts` does not load with no network, a read-only root filesystem and UID 1069, or does not pass clean text and refuse both a synthetic fødselsnummer and a synthetic organisasjonsnummer with a reason that holds neither number's first six digits. |
 | Entrypoint | With no reachable database, the container exits with anything but 2, or without `build/nais-entrypoint.ts`'s own refusal line. |
 | Trivy | Any Critical, any High with a fixed version, a scanner error, or a report with no OS detected. |
 

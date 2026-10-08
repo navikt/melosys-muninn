@@ -3,10 +3,11 @@
 #
 # WHY THIS EXISTS. The entrypoint runs db/require-provisioned.ts BEFORE
 # db/migrate.ts, and that check refuses a database missing any table
-# db/init.sql declares. A muninn migration that adds a table (082,
-# wiki_answers, is the first) therefore stops the new pod before the
-# entrypoint's own migrate step can create it: the pod crash-loops until this
-# job has run with the NEW image.
+# db/init.sql declares. A muninn migration that adds a table therefore stops
+# the new pod before the entrypoint's own migrate step can create it: the pod
+# crash-loops until this job has run with the NEW image. Prod runs muninn
+# 8ae738bf, so a ref at or after 082 is missing two tables: summary_factchecks
+# (079) and wiki_answers (082).
 #
 # Same wiring as nais/provision-job.yaml, for the same reasons: it runs AS THE
 # APP USER through the nais-generated `google-sql-` secret (a table created by
@@ -17,13 +18,21 @@
 #
 # db/migrate.ts reads DB_URL itself, since a `command:` replaces the entrypoint
 # that would otherwise export DATABASE_URL from it. It prints `Database:
-# host:port/db` first. Swap the last argument out for `--status` to see what
-# is pending without writing anything.
+# host:port/db` first.
 #
-# Two values below are REPLACE_ME, read from the app's Deployment, which the
-# team may read. After the app rollout the Deployment already names the NEW
-# image, even while its pod crash-loops:
-#   image:   kubectl --context prod-gcp get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.containers[?(@.name=="melosys-muninn")].image}'
+# `--dry-run` first, ALWAYS, as with provision-job.yaml. Apply the job once as
+# shipped: it lists the pending migrations and applies none (its only DDL is
+# `CREATE TABLE IF NOT EXISTS schema_migrations`, a no-op on a provisioned
+# database). Read the log, delete the job, remove the last argument
+# (`--dry-run`), and apply it again to migrate.
+#
+# Two values below are REPLACE_ME. The image is the digest the deploy run
+# pushed: read `…@sha256:…` from the log of the run's "Pull the pushed image
+# by digest" step, so the job can run while the run's checks do and the old pod
+# still serves (docs/db-setup.md, "The order"). If the rollout has already
+# happened, the Deployment names the new image even while its pod
+# crash-loops. The secret is read from the Deployment, which the team may read:
+#   image (fallback, after the rollout):   kubectl --context prod-gcp get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.containers[?(@.name=="melosys-muninn")].image}'
 #   secret:  kubectl --context prod-gcp get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.volumes[*].secret.secretName}' | tr ' ' '\n' | grep sqeletor
 apiVersion: nais.io/v1
 kind: Naisjob
@@ -37,6 +46,7 @@ spec:
   command:
     - bun
     - db/migrate.ts
+    - --dry-run
   backoffLimit: 0
   ttlSecondsAfterFinished: 3600
   envFrom:

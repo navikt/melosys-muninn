@@ -218,40 +218,65 @@ adds a **table**. The entrypoint runs `db/require-provisioned.ts` before
 and the database does not have it yet, so the pod stops before the step that
 would create it, and crash-loops.
 
-The first such migration is muninn's 082 (`wiki_answers`, answer cards). Every
-later migration that adds a table needs the same step. A migration that only
-adds columns or indexes does not: the check compares tables, not columns.
+Prod runs muninn `8ae738bf` (deploy run 37362902145, 2026-10-05), which
+predates two table-adding migrations: 079 (`summary_factchecks`) and 082
+(`wiki_answers`, answer cards). The next deploy of a ref at or after 082 is
+therefore refused with two missing tables,
+`summary_factchecks (079-summary-factchecks.sql)` and
+`wiki_answers (082-wiki-answers.sql)`, and one run of the job creates both.
+Every later migration that adds a table needs the same step. A migration that
+only adds columns or indexes does not: the check compares tables, not columns.
 
 ### The order
 
-The deploy workflow builds, pushes and rolls out in one run. It has no mode
-that pushes an image without deploying it, so the new image exists only from
-the rollout on, and the order is:
+The deploy workflow builds, pushes and rolls out in one run, but the image
+exists well before the rollout. `Build and push the image` pushes it, and
+`Pull the pushed image by digest` pulls it back by its `@sha256` reference,
+which is in that step's log. The image checks and Trivy then run for several
+minutes before `Deploy to nais` stops the old pod. Run the job in that window:
 
 | # | Step | Who runs it | What you see |
 |---|---|---|---|
-| 1 | `make deploy` (or `scripts/deploy.sh <sha>`) with a muninn ref that adds a table | operator | `Recreate` stops the old pod first, so the app is down from here to step 4. The new pod crash-loops. The workflow's `nais/deploy` step waits for the rollout and fails, so `make deploy` stops with `workflowen feilet`. Step 3 need not wait for that. |
-| 2 | Read the pod log | operator | `db/require-provisioned.ts` exits 1 and names the missing table and the migration that creates it, for example `wiki_answers (082-wiki-answers.sql)`, with `bun db/migrate.ts` as the remedy. |
-| 3 | Fill in and apply `nais/migrate-netpol.yaml`, then `nais/migrate-job.yaml` | operator | The job runs `bun db/migrate.ts` **as the app user** with the image the Deployment now names, prints `Database: host:port/db`, applies the pending migrations and exits 0. |
-| 4 | Wait for the pod | nobody | The crash-looping pod starts by itself on its next retry, within five minutes (`kubectl rollout restart` is not granted to the team). |
-| 5 | Delete the job and the policy | operator | `kubectl delete -f nais/migrate-job.yaml -f nais/migrate-netpol.yaml` |
+| 1 | `make deploy` (or `scripts/deploy.sh <sha>`) with a muninn ref that adds a table | operator | The run builds and pushes. The old pod keeps serving. |
+| 2 | Read the digest from the run log | operator | `Pull the pushed image by digest` logs `…/melosys-muninn:muninn-<sha>@sha256:…`. That is the job's image. |
+| 3 | Fill in and apply `nais/migrate-netpol.yaml`, then `nais/migrate-job.yaml` as shipped | operator | `--dry-run`: the job prints `Database: host:port/db` and the pending migrations, for example `079-summary-factchecks.sql` through `082-wiki-answers.sql`, applies none and exits 0. |
+| 4 | Delete the job, remove its last argument (`--dry-run`), apply it again | operator | The job runs `bun db/migrate.ts` **as the app user**, applies the pending migrations and exits 0. |
+| 5 | Let the run finish | nobody | The new pod passes `db/require-provisioned.ts`, finds nothing pending and starts. |
+| 6 | Delete the job and the policy | operator | `kubectl delete -f nais/migrate-job.yaml -f nais/migrate-netpol.yaml` |
 
-Both `REPLACE_ME` values in the job, and the IP in the policy, are read the
-way `nais/provision-job.yaml`'s are; the commands are in the job's header.
-After step 1 the Deployment already names the new image, so the image command
-returns the new digest even while the pod is failing. To see what is pending
-first, change the job's command to `bun db/migrate.ts --status`, apply it,
-read its log, then delete it and apply the real one.
+Running the migrations while the old pod still serves is safe. They are
+additive, and the old code ignores tables it does not know. The runner takes
+`pg_advisory_lock` for the whole pending list, so if the new pod reaches its
+own migrate step while the job is still running, the two serialize and the
+second finds nothing pending.
+
+The secret in the job is read the way `nais/provision-job.yaml`'s is, with the
+command in `nais/migrate-job.yaml`'s header. The IP in the policy is read with
+the command in `nais/migrate-netpol.yaml`'s header.
+
+#### Fallback: the job is too late
+
+If the rollout gets there first, `Recreate` has stopped the old pod and the
+app is down until the job has run:
+
+| # | Step | Who runs it | What you see |
+|---|---|---|---|
+| 1 | The rollout | — | The new pod crash-loops. The workflow's `nais/deploy` step waits for the rollout and fails, so `make deploy` stops with `workflowen feilet`. Step 3 need not wait for that. |
+| 2 | Read the pod log | operator | `db/require-provisioned.ts` exits 1 and names each missing table and the migration that creates it, with `bun db/migrate.ts` as the remedy. |
+| 3 | Steps 3 and 4 above | operator | The Deployment now names the new image, even while its pod is failing, so the header's `kubectl get deploy` command returns the right digest. |
+| 4 | Wait for the pod | nobody | The crash-looping pod starts by itself on its next retry, within five minutes (`kubectl rollout restart` is not granted to the team). |
+| 5 | Delete the job and the policy | operator | As above. |
 
 ⚠️ **Do not follow the `DROP SCHEMA` line in that refusal.** The check prints
-it for a half-applied `init.sql`, and it destroys every row. A database one
-table-adding migration behind the image needs `bun db/migrate.ts` and nothing
-else.
+it for a half-applied `init.sql`, and it destroys every row. A database that is
+behind the image by table-adding migrations needs `bun db/migrate.ts` and
+nothing else.
 
-This is the same shape as the first rollout on 2026-10-05: an expected
+The fallback is the same shape as the first rollout on 2026-10-05: an expected
 crash-loop, a Naisjob as the app user, and a pod that recovers by itself.
-A build-only mode in `deploy.yml` would let step 3 run before step 1 and remove
-the outage; it does not exist yet.
+A build-only mode in `deploy.yml` would push the image without rolling out, so
+the job always runs first and the window above is not a race; it does not
+exist yet.
 
 ## What it refuses, and why the refusal matters
 

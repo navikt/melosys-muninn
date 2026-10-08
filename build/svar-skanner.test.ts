@@ -89,6 +89,13 @@ describe("scanAnswer slipper gjennom", () => {
   });
 });
 
+// Dokumentert i svar-skanner.ts og README: et organisasjonsnummer avvises bare
+// i datakontekst (erDatakontekst i publiseringsskriptet), ikke i vanlig tekst.
+test("et organisasjonsnummer i vanlig tekst slipper gjennom", () => {
+  expect(ORGNR).toBe("912345688");
+  expect(scanAnswer(`Arbeidsgiveren ${ORGNR} er feil`)).toEqual([]);
+});
+
 test("resultatet er en vanlig liste av { reason }-objekter", () => {
   const svar = scanAnswer(FNR);
   expect(Array.isArray(svar)).toBe(true);
