@@ -346,6 +346,9 @@ spec:
     # with the scanner hook (#659) and the retention sweep (#660).
     - name: WIKI_ANSWER_WIKIS
       value: "melosys-felles"
+    # WIKI_ANSWER_GROUPS (fag/utvikler, NAV idents) comes from the envFrom
+    # secret above, not from here: a roster of idents is personopplysninger.
+    # docs/PREREQUISITES.md §10.
     # Retention (answer-cards plan D17, muninn #660): an answer is deleted 30
     # days after it is exported and 90 days after its latest version when it
     # never is; a redacted answer at the next hourly sweep. The page and its
