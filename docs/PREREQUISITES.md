@@ -477,14 +477,12 @@ roster for answer cards, as `fag=IDENT,IDENT;utvikler=IDENT,…` with NAV idents
 shows its author's groups. It lives in this secret for the same reason as the
 admin list: a roster of NAV idents is personopplysninger, and the repo is
 public. Missing, the pod runs without groups; a malformed entry is dropped with
-a boot warning that names its position, never an ident. Add or change it with
-
-```sh
-kubectl patch secret melosys-muninn -n teammelosys --type merge \
-  -p "{\"stringData\":{\"WIKI_ANSWER_GROUPS\":\"$(cat <file>)\"}}"
-```
-
-and restart the pod through a deploy: `envFrom` is read at container start.
+a boot warning that names its position, never an ident. Add or change it in
+NAIS Console (team `teammelosys`, `prod-gcp`, secret `melosys-muninn`, the same
+place as `MUNINN_ADMIN_IDENTS`): team members cannot read secrets with
+`kubectl` (`container.secrets.get` is not granted, measured 2026-10-08). Then
+run `make deploy`: `envFrom` is read at container start. The pod logs
+`Answer groups: fag (N members), utvikler (N members)`.
 
 ---
 
