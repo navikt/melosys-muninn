@@ -676,9 +676,9 @@ jobs:
           ' || { echo "::error::the embedding model did not produce a 384-dimensional vector offline, read-only, as UID 1069"; exit 1; }
 
       # The answer scanner, at the path nais/app.yaml names, under the pod's
-      # constraints. muninn refuses every answer (503) when the module does not
-      # load or export scanAnswer, so a broken overlay would deploy green and
-      # show up only as answers that cannot be saved. Both numbers are
+      # constraints. muninn refuses (503) every answer with a non-blank body
+      # when the module does not load or export scanAnswer, so a broken overlay
+      # would deploy green and show up only as answers that cannot be saved. Both numbers are
       # SYNTHETIC, built from their check digits here. Probing both kinds
       # catches an adapter that refuses only one of them. The leak check fails
       # the step only when a reason contains a number's first six digits as

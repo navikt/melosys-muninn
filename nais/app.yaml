@@ -334,9 +334,10 @@ spec:
     # build/svar-skanner.ts and the publish script it imports, overlaid into
     # the image by the deploy workflow, so answers go through the same scanner
     # as published pages. From the muninn ref that adds the
-    # WIKI_ANSWER_SCANNER hook, muninn calls its
-    # scanAnswer on every answer body before storing it, and on this profile
-    # refuses all answers when this variable is unset. An older muninn ref
+    # WIKI_ANSWER_SCANNER hook, muninn calls its scanAnswer on every non-blank
+    # answer body before storing it, and on this profile, with this variable
+    # unset, refuses (503) every answer with a non-blank body; an answer that
+    # is only a choice is stored unscanned. An older muninn ref
     # ignores the variable. Answers stay OFF here regardless: WIKI_ANSWER_WIKIS
     # and WIKI_ANSWER_OWNER are deliberately not set until the retention
     # question is settled.

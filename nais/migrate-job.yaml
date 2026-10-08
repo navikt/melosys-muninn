@@ -5,9 +5,11 @@
 # db/migrate.ts, and that check refuses a database missing any table
 # db/init.sql declares. A muninn migration that adds a table therefore stops
 # the new pod before the entrypoint's own migrate step can create it: the pod
-# crash-loops until this job has run with the NEW image. Prod runs muninn
-# 8ae738bf, so a ref at or after 082 is missing two tables: summary_factchecks
-# (079) and wiki_answers (082).
+# crash-loops until this job has run with the NEW image. The only prod deploy
+# run (37362902145, 2026-10-05) shipped muninn 8ae738bf and concluded failure;
+# the pod started later (PR #9). If prod still runs 8ae738bf, a ref at or after
+# 082 is missing two tables: summary_factchecks (079) and wiki_answers (082).
+# The refusal in the pod log names the tables that are actually missing.
 #
 # Same wiring as nais/provision-job.yaml, for the same reasons: it runs AS THE
 # APP USER through the nais-generated `google-sql-` secret (a table created by
