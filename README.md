@@ -43,9 +43,12 @@ to prevent.
 | `build/upstream-dockerfile-pin.txt` | The sha256 of upstream's whole `Dockerfile` and `scripts/docker-entrypoint.sh`, and its `scripts.start`, as last mirrored. The workflow stops when any of them changes. |
 | `nais/step-zero/` | The stub `Application` and its own vars file, for proving the WebSocket upgrade **before** buying Cloud SQL and the GCP project. |
 | `nais/provision-job.yaml` + `nais/provision-netpol.yaml` | The one-shot schema step, as a Naisjob. Applied by hand, not by a workflow — `kubectl debug` is unavailable to the team and the job needs a NetworkPolicy nais will not generate for it. See `docs/db-setup.md`. |
+| `nais/migrate-job.yaml` + `nais/migrate-netpol.yaml` | `bun db/migrate.ts` as a Naisjob, for a muninn ref whose migration adds a table: the entrypoint refuses that database before it migrates. Applied by hand with the image the deploy run pushed, `--dry-run` first. See `docs/db-setup.md`. |
 | `.github/workflows/step-zero.yml` | Builds the echo image → pushes it → applies the stub. Deliberately separate from `deploy.yml`, which refuses while `vars.json` holds a `REPLACE_ME`. |
 | `build/echo/` | The WebSocket echo image step zero deploys. Built by the workflow above; it has nothing to do with the muninn build. |
-| `scripts/publiser-felles-wiki.ts` | The curator's publish and retract script for the felles-wiki bucket: path, size and identifier checks, then an upload of the scanned bytes (`gcloud storage cp -`); `--fjern` deletes. Tests: `bun test scripts/` (no install step; Bun only). |
+| `scripts/publiser-felles-wiki.ts` | The curator's publish and retract script for the felles-wiki bucket: path, size and identifier checks, then an upload of the scanned bytes (`gcloud storage cp -`); `--fjern` deletes. |
+| `build/svar-skanner.ts` | The answer scanner muninn loads through `WIKI_ANSWER_SCANNER`: `scanAnswer` runs the publish script's scanner over an answer to a `<Question>` card. It passes e-mail addresses and NAV idents, always refuses a fødselsnummer, D-nummer or H-nummer, and refuses an organisasjonsnummer only in a data context (for example a keyword such as `orgnr`, a table row, a `key: value` line or a code block), the script's own rule for pages. The workflow copies it and the script into the image under `/app/nais-skanner/`, and checks that it loads there. |
+| Tests | `bun test scripts/ build/` runs the script's and the answer scanner's tests (no install step; Bun only). |
 | `CODEOWNERS` | The team, on everything. This repo is public and takes outside pull requests. |
 | `docs/` | The prerequisites, the schema runbook, step zero, why the bot folder looks the way it does, and every form of the pipeline's guards that was wrong. |
 
@@ -132,6 +135,14 @@ To
 deploy a specific tag or SHA, run `scripts/deploy.sh <tag|sha>` (prefix
 `DRY_RUN=1` to check only); the make targets take no ref. It needs `gh`, `jq`,
 `kubectl` on context `prod-gcp` and naisdevice.
+
+A muninn ref whose migration adds a table crash-loops on rollout until
+`nais/migrate-job.yaml` has run with the new image, so expect a short outage.
+The only prod deploy run so far shipped muninn `8ae738bf`; if prod still runs
+it, the next deploy of a ref at or after 082 is missing two tables:
+`summary_factchecks` (079) and `wiki_answers` (082). `docs/db-setup.md` has
+how to read the ref prod runs, and the order: deploy, let the pod crash-loop,
+then run the job with the image the Deployment names.
 
 Before the first deploy, work through **`docs/PREREQUISITES.md`**. §1–§10 are
 ten items and each one alone makes the pod useless; §0 is not one of them, it

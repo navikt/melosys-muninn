@@ -1,0 +1,62 @@
+# One-shot `bun db/migrate.ts` for melosys-muninn — see docs/db-setup.md,
+# "A muninn ref that adds a table".
+#
+# WHY THIS EXISTS. The entrypoint runs db/require-provisioned.ts BEFORE
+# db/migrate.ts, and that check refuses a database missing any table
+# db/init.sql declares. A muninn migration that adds a table therefore stops
+# the new pod before the entrypoint's own migrate step can create it: the pod
+# crash-loops until this job has run with the NEW image. The only prod deploy
+# run (37362902145, 2026-10-05) shipped muninn 8ae738bf and concluded failure;
+# the pod started later (PR #9). If prod still runs 8ae738bf, a ref at or after
+# 082 is missing two tables: summary_factchecks (079) and wiki_answers (082).
+# The refusal in the pod log names the tables that are actually missing.
+#
+# Same wiring as nais/provision-job.yaml, for the same reasons: it runs AS THE
+# APP USER through the nais-generated `google-sql-` secret (a table created by
+# anyone else is owned by them, and the pod gets permission-denied), and it
+# declares no gcp.sqlInstances (that would create a second SQL user). Apply
+# nais/migrate-netpol.yaml alongside it, or the connection dies as
+# CONNECT_TIMEOUT. Delete both when finished.
+#
+# db/migrate.ts reads DB_URL itself, since a `command:` replaces the entrypoint
+# that would otherwise export DATABASE_URL from it. It prints `Database:
+# host:port/db` first.
+#
+# `--dry-run` first, ALWAYS, as with provision-job.yaml. Apply the job once as
+# shipped: it lists the pending migrations and applies none (its only DDL is
+# `CREATE TABLE IF NOT EXISTS schema_migrations`, a no-op on a provisioned
+# database). Read the log, delete the job, remove the last argument
+# (`--dry-run`), and apply it again to migrate.
+#
+# Two values below are REPLACE_ME, both read from the Deployment, which the
+# team may read. Run the job after the rollout (docs/db-setup.md, "The
+# order"): the Deployment then names the new image even while its pod
+# crash-loops, and that image is the job's.
+#   image:   kubectl --context prod-gcp get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.containers[?(@.name=="melosys-muninn")].image}'
+#   secret:  kubectl --context prod-gcp get deploy -n teammelosys melosys-muninn -o jsonpath='{.spec.template.spec.volumes[*].secret.secretName}' | tr ' ' '\n' | grep sqeletor
+apiVersion: nais.io/v1
+kind: Naisjob
+metadata:
+  name: melosys-muninn-migrate
+  namespace: teammelosys
+  labels:
+    team: teammelosys
+spec:
+  image: REPLACE_ME_image_from_the_deployment
+  command:
+    - bun
+    - db/migrate.ts
+    - --dry-run
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  envFrom:
+    - secret: google-sql-melosys-muninn
+  filesFrom:
+    - secret: sqeletor-melosys-muninn-REPLACE_ME
+      mountPath: /var/run/secrets/nais.io/sqlcertificate
+  resources:
+    limits:
+      memory: 1024Mi
+    requests:
+      cpu: 200m
+      memory: 512Mi
