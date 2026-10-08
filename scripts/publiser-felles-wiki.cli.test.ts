@@ -422,6 +422,15 @@ describe("--fjern", () => {
     expect(kall().filter((k) => k.args[1] === "rm")).toEqual([]);
   });
 
+  test("påminnelsen om datafiler skrives for en .md- eller .mdx-side, ikke for en .html-side", () => {
+    const påminnelse = "datafilene en side viser, slettes ikke med siden";
+    expect(kjør(["--fjern", "--dry-run", "a.md"]).ut).toContain(påminnelse);
+    expect(kjør(["--fjern", "--dry-run", "b/c.mdx"]).ut).toContain(påminnelse);
+    const html = kjør(["--fjern", "--dry-run", "a.html"]);
+    expect(html.kode).toBe(0);
+    expect(html.ut).not.toContain(påminnelse);
+  });
+
   test("jokertegn avvises også i --fjern", () => {
     const r = kjør(["--fjern", "--ja", "b*.md"]);
     expect(r.kode).toBe(1);
@@ -556,6 +565,23 @@ describe("datafiler en side viser", () => {
     expect(destinasjoner()).toEqual(["gs://felles-test/plans/p.mdx"]);
     expect(r.ut).toContain("d/q.csv er ikke lastet opp: ingen side som viser den, ble lastet opp");
     expect(r.ut).toMatch(/0 lastet opp, 0 avvist, 2 feilet/);
+  });
+
+  test("en avvist side gir datafilen sin grunn én gang, også når bøtta sjekkes for kollisjoner etterpå", () => {
+    skriv("plans/p.mdx", ENKEL + `\n${FNR}\n`);
+    skriv("plans/ok.md", "# OK\n");
+    skriv("d/q.csv", "a\n1\n");
+    const r = kjør([rot, "plans/p.mdx", "plans/ok.md"]);
+    expect(r.kode).toBe(1);
+    expect(r.ut.split("siden som viser filen, er avvist")).toHaveLength(2);
+  });
+
+  test("kontrolltegn i en sti fra siden og i en sti fra kommandolinjen skrives synlige", () => {
+    skriv("plans/p.mdx", '# P\n\n<Query id="q" csv="../d/\u001b[31mq.csv" />\n');
+    const r = kjør(["--dry-run", rot, "plans/p.mdx", "x/\u001b[31my.md"]);
+    expect(r.ut).not.toContain("\u001b");
+    expect(r.ut).toContain("d/\\u{1b}[31mq.csv: filen finnes ikke");
+    expect(r.ut).toMatch(/AVVIST  x\/\\u\{1b\}\[31my\.md/);
   });
 
   test("en datafil lastes opp når én av sidene som viser den, er godkjent", () => {

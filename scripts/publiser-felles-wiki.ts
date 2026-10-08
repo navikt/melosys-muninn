@@ -30,8 +30,9 @@
  *     lastet opp i samme kjøring. Datafiler skannes som sider, men uten
  *     `--tillat-ident`: er alle funnene i en CSV NAVident, fjernes hver kolonne
  *     med et funn fra kopien som lastes opp, og kopien skannes på nytt.
- *     Kildefilen endres ikke. Blir det ingen kolonner igjen, eller blir kopien
- *     større enn 1 MB, avvises filen. En NAVident i en .sql eller .yaml avvises,
+ *     Kildefilen endres ikke. Bare kommadelt CSV renses: har overskriften
+ *     semikolon eller tabulator utenfor anførselstegn, blir det ingen kolonner
+ *     igjen, eller blir kopien større enn 1 MB, avvises filen. En NAVident i en .sql eller .yaml avvises,
  *     og et fødselsnummer, D-nummer, H-nummer, en e-postadresse eller et
  *     organisasjonsnummer avvises i alle datafiler, før noen kolonne fjernes.
  *   - størrelse: over 2 MB for en side, 1 MB for en datafil, hopper speilet
@@ -714,11 +715,16 @@ export function fjernIdentKolonner(tekst: string): { tekst: string; fjernet: Fje
     });
   }
   if (treff.size === 0) return { tekst, fjernet: [] };
-  const bredde = Math.max(...poster.map((p) => p.celler.length));
+  const overskrift = poster.find((p) => !(p.celler.length === 1 && p.celler[0]!.tekst === "" && !p.celler[0]!.sitert))?.celler ?? [];
+  // Et komma i et felt (desimalkomma) gir en semikolondelt fil flere kolonner, så bredden alene avslører den ikke.
+  const usitert = overskrift.filter((c) => !c.sitert).map((c) => c.tekst).join("");
+  const skilletegn = usitert.includes(";") ? "semikolon" : usitert.includes("\t") ? "tabulator" : null;
+  if (skilletegn) return `overskriften er delt med ${skilletegn}; bare kommadelt CSV kan renses for kolonner med NAVident`;
+  let bredde = 0;
+  for (const p of poster) bredde = Math.max(bredde, p.celler.length);
   if (treff.size >= bredde) {
     return "det blir ingen kolonner igjen når kolonnene med NAVident fjernes — er filen delt med semikolon eller tabulator? Bare kommadelt CSV kan renses";
   }
-  const overskrift = poster.find((p) => !(p.celler.length === 1 && p.celler[0]!.tekst === "" && !p.celler[0]!.sitert))?.celler ?? [];
   const fjernet = [...treff.keys()].sort((a, b) => a - b).map((k) => {
     const navn = overskrift[k]?.tekst ?? "";
     return { navn: navn && skannTekst(navn).length === 0 ? synligeTegn(navn) : `kolonne nr. ${k + 1}`, rader: treff.get(k)! };
@@ -1056,7 +1062,7 @@ function fjern(valg: Valg, bucket: string, o: Omgivelser): number {
     return EXIT_AVVIST;
   }
   for (const m of mål) o.ut(`vil slette gs://${bucket}/${m.visning}`);
-  if (mål.some((m) => SIDE_ENDELSER.has(path.posix.extname(m.objekt).toLowerCase()))) {
+  if (mål.some((m) => [".md", ".mdx"].includes(path.posix.extname(m.objekt).toLowerCase()))) {
     o.ut("(datafilene en side viser, slettes ikke med siden — oppgi dem også, ellers blir de liggende i bøtta)");
   }
   if (valg.dryRun) {

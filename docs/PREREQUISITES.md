@@ -529,8 +529,9 @@ every team member, so it refuses rather than warns:
   not apply to data files. When every hit in a CSV is a NAVident, each column
   with a hit is dropped from the uploaded copy, the script prints the dropped
   columns per file, and the copy is scanned again; the local file is not
-  changed. The CSV is refused when no column would be left (a semicolon- or
-  tab-separated file reads as one column) or when the copy grows past 1 MB. A
+  changed. Only comma-separated CSV can be cleaned: a CSV whose header row
+  has a semicolon or a tab outside quotes is refused, and so is one where no
+  column would be left or the copy grows past 1 MB. A
   NAVident in a `.sql` or `.yaml` is refused, and any other hit — an identity
   number, a D- or H-number, an organisation number or an e-mail address — is
   refused in every data file, before any column is dropped.

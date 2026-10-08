@@ -97,10 +97,32 @@ describe("fjernIdentKolonner", () => {
     });
   });
 
-  test("en semikolondelt CSV der alle kolonnene ville blitt fjernet, gir en grunn", () => {
-    const r = fjernIdentKolonner("id;endret_av\n1;Z990123\n");
+  test("en CSV der alle kolonnene ville blitt fjernet, gir en grunn", () => {
+    const r = fjernIdentKolonner("endret_av,Z990124\nZ990123,Z990125\n");
     expect(typeof r).toBe("string");
     expect(r as string).toContain("ingen kolonner igjen");
+  });
+
+  test("en semikolon- eller tabulatordelt CSV med desimalkomma avvises og nevner skilletegnet", () => {
+    // Før: kommaene i 12,5 og 7,25 ga to kolonner, kolonne 1 (hele «1;Z990123;12») ble fjernet, og «5» og «25» ble lastet opp.
+    const semikolon = fjernIdentKolonner("id;endret_av;belop\n1;Z990123;12,5\n2;Z990124;7,25\n");
+    expect(typeof semikolon).toBe("string");
+    expect(semikolon as string).toContain("semikolon");
+    const tab = fjernIdentKolonner("id\tendret_av\tbelop\n1\tZ990123\t12,5\n");
+    expect(typeof tab).toBe("string");
+    expect(tab as string).toContain("tabulator");
+  });
+
+  test("et semikolon i en overskrift i anførselstegn er ikke et skilletegn", () => {
+    expect(fjernIdentKolonner('"id;nr",endret_av\n1,Z990123\n')).toEqual({ tekst: '"id;nr"\n1\n', fjernet: [{ navn: "endret_av", rader: 1 }] });
+  });
+
+  test("en fil med over en million poster, de fleste tomme linjer, gir en kopi i stedet for å krasje", () => {
+    // Før: Math.max(...poster) sprengte kallstakken over omtrent 637 000 poster.
+    const start = "a,b\n1,Z990123\n";
+    const tomme = "\n".repeat(1_048_014 - start.length);
+    const r = fjernIdentKolonner(start + tomme);
+    expect(r).toEqual({ tekst: "a\n1\n" + tomme, fjernet: [{ navn: "b", rader: 1 }] });
   });
 
   test("en overskrift med kontrolltegn skrives ut med tegnene synlige", () => {
@@ -160,7 +182,20 @@ describe("vurderFil for en datafil", () => {
   test("CSV: en semikolondelt fil med NAVident avvises i stedet for å lastes opp tom", () => {
     const v = vurderFil(skriv("r/semikolon.csv", "id;endret_av\n1;Z990123\n"), "r/semikolon.csv", false, undefined, true);
     expect(v.bytes).toBeUndefined();
-    expect(v.avslag.join("\n")).toContain("ingen kolonner igjen");
+    expect(v.avslag.join("\n")).toContain("delt med semikolon");
+  });
+
+  test("CSV: en semikolondelt fil med desimalkomma og NAVident avvises og lastes ikke opp", () => {
+    const v = vurderFil(skriv("r/desimal.csv", "id;endret_av;belop\n1;Z990123;12,5\n2;Z990124;7,25\n"), "r/desimal.csv", false, undefined, true);
+    expect(v.bytes).toBeUndefined();
+    expect(v.avslag.join("\n")).toContain("semikolon");
+  });
+
+  test("CSV: en fil på 1 048 014 byte med mest tomme linjer vurderes uten å krasje", () => {
+    const start = "a,b\n1,Z990123\n";
+    const v = vurderFil(skriv("r/tomme.csv", start + "\n".repeat(1_048_014 - start.length)), "r/tomme.csv", false, undefined, true);
+    expect(v.avslag).toEqual([]);
+    expect(v.fjernet).toEqual([{ navn: "b", rader: 1 }]);
   });
 
   test("CSV: et fødselsnummer som bare oppstår i kopien når kolonnen mellom er borte, avvises ved ny skanning", () => {
