@@ -30,9 +30,13 @@
  *     lastet opp i samme kjøring. Datafiler skannes som sider, men uten
  *     `--tillat-ident`: er alle funnene i en CSV NAVident, fjernes hver kolonne
  *     med et funn fra kopien som lastes opp, og kopien skannes på nytt.
- *     Kildefilen endres ikke. Bare kommadelt CSV renses: har overskriften
- *     semikolon eller tabulator utenfor anførselstegn, blir det ingen kolonner
- *     igjen, eller blir kopien større enn 1 MB, avvises filen. En NAVident i en .sql eller .yaml avvises,
+ *     Kildefilen endres ikke. Bare kommadelt, rektangulær CSV renses; filen
+ *     avvises når et anførselstegn aldri lukkes eller følges av tekst før neste
+ *     komma eller linjeskift, når en overskriftscelle uten anførselstegn har
+ *     semikolon eller tabulator, når overskriften (første rad som ikke er en
+ *     tom linje) har færre enn to kolonner, når en rad som ikke er tom har et
+ *     annet antall kolonner enn overskriften, når det blir ingen kolonner igjen, og
+ *     når kopien blir større enn 1 MB. En NAVident i en .sql eller .yaml avvises,
  *     og et fødselsnummer, D-nummer, H-nummer, en e-postadresse eller et
  *     organisasjonsnummer avvises i alle datafiler, før noen kolonne fjernes.
  *   - størrelse: over 2 MB for en side, 1 MB for en datafil, hopper speilet
@@ -637,12 +641,13 @@ interface Post {
 }
 
 /**
- * CSV etter RFC 4180, som muninns `parseCsv`: felt i anførselstegn kan ha
- * komma, `""` og linjeskift. Alle poster beholdes, også tomme linjer, med sitt
- * eget linjeskift, så kopien får samme linjer minus kolonnene. Null når et
- * anførselstegn aldri lukkes.
+ * CSV etter RFC 4180: felt i anførselstegn kan ha komma, `""` og linjeskift.
+ * Alle poster beholdes, også tomme linjer, med sitt eget linjeskift, så kopien
+ * får samme linjer minus kolonnene. Gir en feil når et anførselstegn aldri
+ * lukkes, eller når tekst følger etter et avsluttende anførselstegn (`"a";"b"`,
+ * `"x"y`); muninns `parseCsv` limer da teksten inn i cellen.
  */
-function lesCsv(tekst: string): Post[] | null {
+function lesCsv(tekst: string): { poster: Post[] } | { feil: string } {
   const poster: Post[] = [];
   let post: Celle[] = [];
   let felt = "";
@@ -667,8 +672,13 @@ function lesCsv(tekst: string): Post[] | null {
         i += 2;
         continue;
       }
-      if (c === '"') iSitat = false;
-      else felt += c;
+      if (c === '"') {
+        iSitat = false;
+        const neste = tekst[i + 1];
+        if (neste !== undefined && neste !== "," && neste !== "\r" && neste !== "\n") {
+          return { feil: `rad ${poster.length + 1} har tekst etter et avsluttende anførselstegn` };
+        }
+      } else felt += c;
       i++;
       continue;
     }
@@ -684,9 +694,14 @@ function lesCsv(tekst: string): Post[] | null {
     else felt += c;
     i++;
   }
-  if (iSitat) return null;
+  if (iSitat) return { feil: "et anførselstegn lukkes aldri" };
   if (felt !== "" || post.length > 0 || sitert) nyPost("");
-  return poster;
+  return { poster };
+}
+
+/** En tom linje: én tom celle uten anførselstegn. Muninns leser hopper over den. */
+function erTom(p: Post): boolean {
+  return p.celler.length === 1 && p.celler[0]!.tekst === "" && !p.celler[0]!.sitert;
 }
 
 function skrivCelle(c: Celle): string {
@@ -700,14 +715,28 @@ export interface FjernetKolonne {
   rader: number;
 }
 
+const BARE_KOMMADELT = "bare kommadelt, rektangulær CSV kan renses for kolonner med NAVident";
+
 /**
  * Kopien av en CSV uten kolonnene der skanneren finner en NAVident, eller en
  * grunn til at det ikke går. Hver celle skannes for seg; en kolonne fjernes i
  * alle poster. Er ingen kolonne rammet, er teksten uendret.
+ *
+ * Kolonner fjernes bare fra en fil som beviselig er kommadelt og rektangulær;
+ * alt annet avvises:
+ * - et anførselstegn som aldri lukkes, eller tekst etter et avsluttende
+ *   anførselstegn før neste komma eller linjeskift;
+ * - et semikolon eller en tabulator i en overskriftscelle uten anførselstegn;
+ * - en overskrift med færre enn to kolonner;
+ * - en post som ikke er tom og har et annet antall kolonner enn overskriften;
+ * - ingen kolonner igjen etter at kolonnene med NAVident er fjernet.
+ * Overskriften er første post som ikke er en tom linje. Tomme linjer er lov hvor
+ * som helst og beholdes. Et semikolon i en datarad avvises ikke.
  */
 export function fjernIdentKolonner(tekst: string): { tekst: string; fjernet: FjernetKolonne[] } | string {
-  const poster = lesCsv(tekst);
-  if (!poster) return "CSV-en har et anførselstegn som aldri lukkes, så kolonnene kan ikke skilles";
+  const lest = lesCsv(tekst);
+  if ("feil" in lest) return `${lest.feil}; ${BARE_KOMMADELT}`;
+  const poster = lest.poster;
   const treff = new Map<number, number>();
   for (const post of poster) {
     post.celler.forEach((celle, k) => {
@@ -715,16 +744,20 @@ export function fjernIdentKolonner(tekst: string): { tekst: string; fjernet: Fje
     });
   }
   if (treff.size === 0) return { tekst, fjernet: [] };
-  const overskrift = poster.find((p) => !(p.celler.length === 1 && p.celler[0]!.tekst === "" && !p.celler[0]!.sitert))?.celler ?? [];
+  const overskrift = poster.find((p) => !erTom(p))?.celler ?? [];
   // Et komma i et felt (desimalkomma) gir en semikolondelt fil flere kolonner, så bredden alene avslører den ikke.
   const usitert = overskrift.filter((c) => !c.sitert).map((c) => c.tekst).join("");
   const skilletegn = usitert.includes(";") ? "semikolon" : usitert.includes("\t") ? "tabulator" : null;
-  if (skilletegn) return `overskriften er delt med ${skilletegn}; bare kommadelt CSV kan renses for kolonner med NAVident`;
-  let bredde = 0;
-  for (const p of poster) bredde = Math.max(bredde, p.celler.length);
-  if (treff.size >= bredde) {
-    return "det blir ingen kolonner igjen når kolonnene med NAVident fjernes — er filen delt med semikolon eller tabulator? Bare kommadelt CSV kan renses";
+  if (skilletegn) return `overskriften er delt med ${skilletegn}; ${BARE_KOMMADELT}`;
+  const bredde = overskrift.length;
+  if (bredde < 2) return `overskriften har færre enn to kolonner; ${BARE_KOMMADELT}`;
+  for (let r = 0; r < poster.length; r++) {
+    const p = poster[r]!;
+    if (!erTom(p) && p.celler.length !== bredde) {
+      return `rad ${r + 1} har ${p.celler.length} kolonner, overskriften har ${bredde}; ${BARE_KOMMADELT}`;
+    }
   }
+  if (treff.size >= bredde) return `det blir ingen kolonner igjen når kolonnene med NAVident fjernes; ${BARE_KOMMADELT}`;
   const fjernet = [...treff.keys()].sort((a, b) => a - b).map((k) => {
     const navn = overskrift[k]?.tekst ?? "";
     return { navn: navn && skannTekst(navn).length === 0 ? synligeTegn(navn) : `kolonne nr. ${k + 1}`, rader: treff.get(k)! };

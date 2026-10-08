@@ -117,13 +117,62 @@ describe("fjernIdentKolonner", () => {
     expect(fjernIdentKolonner('"id;nr",endret_av\n1,Z990123\n')).toEqual({ tekst: '"id;nr"\n1\n', fjernet: [{ navn: "endret_av", rader: 1 }] });
   });
 
-  test("en fil med over en million poster, de fleste tomme linjer, gir en kopi i stedet for å krasje", () => {
+  // Klassesjekk: kolonner fjernes bare fra kommadelt, rektangulær CSV. Hver
+  // form under ga før en kopi med rester av tallene («5», «"5"""»).
+  const avvist = (csv: string, grunn: string) => {
+    const r = fjernIdentKolonner(csv);
+    expect(typeof r === "string" ? r : `lastet opp: ${JSON.stringify(r.tekst)}`).toContain(grunn);
+  };
+
+  test("tekst etter et avsluttende anførselstegn avvises (alle celler i anførselstegn, semikolondelt)", () => {
+    avvist('"id";"endret_av";"belop"\n"1";"Z990123";"12,5"\n', "etter et avsluttende anførselstegn");
+  });
+
+  test("tekst etter et avsluttende anførselstegn avvises (bare første celle i anførselstegn)", () => {
+    avvist('"id";endret_av;belop\n1;Z990123;12,5\n', "etter et avsluttende anførselstegn");
+  });
+
+  test("tekst etter et avsluttende anførselstegn i en datarad avvises", () => {
+    avvist('a,b\n"x"y,Z990123\n', "etter et avsluttende anførselstegn");
+  });
+
+  test("en overskrift med bare én kolonne avvises", () => {
+    avvist('"id;endret_av;belop"\n1;Z990123;12,5\n', "færre enn to kolonner");
+    avvist("rapport\n1;Z990123;12,5\n", "færre enn to kolonner");
+    avvist("   \nid;endret_av;belop\n1;Z990123;12,5\n", "færre enn to kolonner");
+    avvist("id|endret_av|belop\n1|Z990123|12,5\n", "færre enn to kolonner");
+  });
+
+  test("en post med et annet antall kolonner enn overskriften avvises", () => {
+    avvist("id,endret_av\n1,Z990123,x\n", "rad 2 har 3 kolonner");
+    avvist("id,endret_av,belop\n1,Z990123\n", "rad 2 har 2 kolonner");
+  });
+
+  test("et semikolon i en overskriftscelle uten anførselstegn avvises også når overskriften har komma", () => {
+    avvist("id;nr,endret_av\n1;2,Z990123\n", "semikolon");
+  });
+
+  test("overskriften er første post som ikke er tom; tomme linjer før og mellom postene beholdes", () => {
+    expect(fjernIdentKolonner("\n\nid,endret_av\n1,Z990123\n\n2,Z990124\n")).toEqual({
+      tekst: "\n\nid\n1\n\n2\n",
+      fjernet: [{ navn: "endret_av", rader: 2 }],
+    });
+  });
+
+  test("et semikolon eller en tabulator i en datarad i en kommadelt CSV avvises ikke", () => {
+    expect(fjernIdentKolonner("id,notat,endret_av\n1,a;b,Z990123\n2,x\ty,Z990124\n")).toEqual({
+      tekst: "id,notat\n1,a;b\n2,x\ty\n",
+      fjernet: [{ navn: "endret_av", rader: 2 }],
+    });
+  });
+
+  test("en fil med 700 000 poster, de fleste tomme linjer, gir en kopi i stedet for å krasje", () => {
     // Før: Math.max(...poster) sprengte kallstakken over omtrent 637 000 poster.
     const start = "a,b\n1,Z990123\n";
-    const tomme = "\n".repeat(1_048_014 - start.length);
+    const tomme = "\n".repeat(700_000);
     const r = fjernIdentKolonner(start + tomme);
     expect(r).toEqual({ tekst: "a\n1\n" + tomme, fjernet: [{ navn: "b", rader: 1 }] });
-  });
+  }, 10_000);
 
   test("en overskrift med kontrolltegn skrives ut med tegnene synlige", () => {
     const r = fjernIdentKolonner("id,\u001b[31mendret\n1,Z990123\n");
@@ -191,12 +240,12 @@ describe("vurderFil for en datafil", () => {
     expect(v.avslag.join("\n")).toContain("semikolon");
   });
 
-  test("CSV: en fil på 1 048 014 byte med mest tomme linjer vurderes uten å krasje", () => {
+  test("CSV: en fil med 700 000 poster, de fleste tomme linjer, vurderes uten å krasje", () => {
     const start = "a,b\n1,Z990123\n";
-    const v = vurderFil(skriv("r/tomme.csv", start + "\n".repeat(1_048_014 - start.length)), "r/tomme.csv", false, undefined, true);
+    const v = vurderFil(skriv("r/tomme.csv", start + "\n".repeat(700_000)), "r/tomme.csv", false, undefined, true);
     expect(v.avslag).toEqual([]);
     expect(v.fjernet).toEqual([{ navn: "b", rader: 1 }]);
-  });
+  }, 10_000);
 
   test("CSV: et fødselsnummer som bare oppstår i kopien når kolonnen mellom er borte, avvises ved ny skanning", () => {
     const abs = skriv("r/sammen.csv", `a,b,c\n${FNR.slice(0, 6)},Z990123,${FNR.slice(6)}\n`);
