@@ -510,15 +510,32 @@ the bucket's name and the owning project's number, and nothing else.
 `scripts/publiser-felles-wiki.ts` is the only automated check between a page and
 every team member, so it refuses rather than warns:
 
-- **Paths** follow the mirror's own rules: `.md`, `.mdx`, `.html` and a root
-  `.wiki-reader.json` only; no hidden segments, `..`, backslashes, control or
+- **Paths** follow the mirror's own rules: `.md`, `.mdx`, `.html`, a root
+  `.wiki-reader.json`, and the data files a published page names (below); no
+  hidden segments, `..`, backslashes, control or
   bidi characters, or segments over 211 bytes. It also refuses the wildcard
   characters `[ ] * ?`, a name ending in `#<digits>` (gcloud reads it as an
   object generation), symlinks, and a name that collides under lowercase + NFC
-  with a different live object anywhere in the bucket. Images and extracts (`.csv`,
-  `.json`, `.xlsx`, `.txt`) are never published; a page that shows local images
-  gets a warning, because the images will not appear.
-- **Size**: over 2 MB the mirror skips the object, so the script refuses it.
+  with a different live object anywhere in the bucket. Images and extracts
+  (`.tsv`, `.json`, `.xlsx`, `.txt`) are never published; a page that shows
+  local images gets a warning, because the images will not appear.
+- **Data files**: a page goes up with the `.csv`, `.sql`, `.yaml` and `.yml`
+  files its `<Query csv= sql=>`, `<CaseBoard src=>` and `<DeltaTable src=>`
+  name, wherever they sit under the wiki root. The script finds at least the
+  files muninn's reader reads, and sometimes more; every file it finds is
+  checked like a page. A data file given on its own, with no page naming it,
+  is refused, and a data file is uploaded only when at least one page naming it
+  passed every check and was uploaded in the same run. `--tillat-ident` does
+  not apply to data files. When every hit in a CSV is a NAVident, each column
+  with a hit is dropped from the uploaded copy, the script prints the dropped
+  columns per file, and the copy is scanned again; the local file is not
+  changed. The CSV is refused when no column would be left (a semicolon- or
+  tab-separated file reads as one column) or when the copy grows past 1 MB. A
+  NAVident in a `.sql` or `.yaml` is refused, and any other hit — an identity
+  number, a D- or H-number, an organisation number or an e-mail address — is
+  refused in every data file, before any column is dropped.
+- **Size**: over 2 MB for a page, or 1 MB for a data file, the mirror skips the
+  object, so the script refuses it.
 - **Encoding**: a UTF-16 or UTF-32 file (a byte-order mark or NUL bytes) is
   refused; the mirror and the reader expect UTF-8, and the checks below cannot
   read it.
@@ -564,7 +581,8 @@ bun scripts/publiser-felles-wiki.ts --fjern --ja <relPath>...   # no question
 ```
 
 `<relPath>` is the object name in the bucket, the same path the page was
-published under. The script prints what it will delete (`vil slette …`) before
+published under. `--fjern` deletes only the objects you name: list the page's
+data files too, or they stay in the bucket. The script prints what it will delete (`vil slette …`) before
 it asks, and `sletter …` only once you confirm. The bucket has no soft delete, so a deleted object is gone; the
 curator's local folder is the copy of record. The pod drops the page on its next
 poll, about 2 minutes later. If a page carried personal data, retract it first,

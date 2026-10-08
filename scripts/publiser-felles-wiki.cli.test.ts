@@ -524,4 +524,46 @@ describe("datafiler en side viser", () => {
     expect(r.ut).toContain("siden som viser filen, er avvist");
     expect(r.ut).toContain("rapport-sql-resultat/Q-1.sql: filen finnes ikke");
   });
+  // En datafil lastes bare opp når minst én side som viser den, er godkjent og lastet opp i samme kjøring.
+  const ENKEL = '# P\n\n<Query id="q" csv="../d/q.csv" />\n';
+
+  test("en side som kolliderer med et objekt i bøtta, tar med seg datafilen", () => {
+    skriv("plans/p.mdx", ENKEL);
+    skriv("d/q.csv", "a\n1\n");
+    writeFileSync(path.join(falsk, "liste.json"), JSON.stringify([{ name: "plans/P.mdx" }]));
+    const r = kjør([rot, "plans/p.mdx"]);
+    expect(r.kode).toBe(1);
+    expect(opplastinger()).toEqual([]);
+    expect(r.ut).toMatch(/AVVIST  d\/q\.csv\n {4}avslag: siden som viser filen, er avvist/);
+  });
+
+  test("to sider som kolliderer i samme kjøring, tar med seg datafilen de viser", () => {
+    skriv("plans/p.mdx", ENKEL);
+    skriv("plans/P.mdx", ENKEL);
+    skriv("d/q.csv", "a\n1\n");
+    const r = kjør(["--dry-run", rot, "plans/p.mdx", "plans/P.mdx"]);
+    expect(r.kode).toBe(1);
+    expect(r.ut).not.toContain("vil laste opp gs://felles-test/d/q.csv");
+    expect(r.ut).toMatch(/AVVIST  d\/q\.csv\n {4}avslag: siden som viser filen, er avvist/);
+  });
+
+  test("når opplastingen av siden feiler, lastes datafilen ikke opp", () => {
+    skriv("plans/p.mdx", ENKEL);
+    skriv("d/q.csv", "a\n1\n");
+    writeFileSync(path.join(falsk, "feil"), "gs://felles-test/plans/p.mdx\n");
+    const r = kjør([rot, "plans/p.mdx"]);
+    expect(r.kode).toBe(3);
+    expect(destinasjoner()).toEqual(["gs://felles-test/plans/p.mdx"]);
+    expect(r.ut).toContain("d/q.csv er ikke lastet opp: ingen side som viser den, ble lastet opp");
+    expect(r.ut).toMatch(/0 lastet opp, 0 avvist, 2 feilet/);
+  });
+
+  test("en datafil lastes opp når én av sidene som viser den, er godkjent", () => {
+    skriv("plans/p.mdx", ENKEL);
+    skriv("plans/r.mdx", ENKEL + `\n${FNR}\n`);
+    skriv("d/q.csv", "a\n1\n");
+    const r = kjør([rot, "plans/p.mdx", "plans/r.mdx"]);
+    expect(r.kode).toBe(1);
+    expect(destinasjoner()).toEqual(["gs://felles-test/plans/p.mdx", "gs://felles-test/d/q.csv"]);
+  });
 });

@@ -7,6 +7,9 @@
  *   bun scripts/publiser-felles-wiki.ts [--dry-run] [--tillat-ident] [--bucket <navn>] [--] <wiki-rot> <relPath>...
  *   bun scripts/publiser-felles-wiki.ts --fjern [--ja] [--dry-run] [--bucket <navn>] [--] <relPath>...
  *
+ * `--fjern` sletter bare objektene som oppgis: datafilene en side viser, må
+ * oppgis i tillegg til siden, ellers blir de liggende i bøtta.
+ *
  * Skanneren er det eneste automatiske vernet mot personopplysninger: poden viser
  * alt i bøtta til hele teamet. Hver fil sjekkes, og en fil som feiler, lastes
  * ikke opp:
@@ -20,14 +23,17 @@
  *     Bilder og uttrekk (.json .tsv .xlsx .txt) publiseres aldri.
  *   - datafiler: en side lastes opp sammen med filene dens `<Query csv= sql=>`,
  *     `<CaseBoard src=>` og `<DeltaTable src=>` navngir (.csv .sql .yaml .yml),
- *     uansett hvor under wiki-roten de ligger. Samme regel som muninns leser
- *     (`navngitteDatafiler`). En .csv, .sql eller .yaml som oppgis alene, uten
- *     en side som viser den, avvises. Datafiler skannes som sider, men uten
- *     `--tillat-ident`: i en CSV fjernes hver kolonne der skanneren finner en
- *     NAVident fra kopien som lastes opp, og kopien skannes på nytt. Kildefilen
- *     endres ikke. En NAVident i en .sql eller .yaml avvises, og et
- *     fødselsnummer, en e-postadresse eller et organisasjonsnummer avvises i
- *     alle datafiler.
+ *     uansett hvor under wiki-roten de ligger. Porten (`navngitteDatafiler`)
+ *     finner minst det muninns leser leser, og noen ganger mer. En .csv, .sql
+ *     eller .yaml som oppgis alene, uten en side som viser den, avvises, og en
+ *     datafil lastes bare opp når minst én side som viser den, er godkjent og
+ *     lastet opp i samme kjøring. Datafiler skannes som sider, men uten
+ *     `--tillat-ident`: er alle funnene i en CSV NAVident, fjernes hver kolonne
+ *     med et funn fra kopien som lastes opp, og kopien skannes på nytt.
+ *     Kildefilen endres ikke. Blir det ingen kolonner igjen, eller blir kopien
+ *     større enn 1 MB, avvises filen. En NAVident i en .sql eller .yaml avvises,
+ *     og et fødselsnummer, D-nummer, H-nummer, en e-postadresse eller et
+ *     organisasjonsnummer avvises i alle datafiler, før noen kolonne fjernes.
  *   - størrelse: over 2 MB for en side, 1 MB for en datafil, hopper speilet
  *     over objektet, så det avvises her.
  *   - koding: UTF-16 og UTF-32 (merke eller NUL-byte) avvises.
@@ -436,10 +442,12 @@ export function sjekkSti(rel: string, navngitt = false): string | null {
 // publiser-felles-wiki.datafiler.cases.json, som er en kopi av muninns
 // src/wiki/page-file-refs.cases.json; muninn tester sin egen regel mot samme fil.
 //
-// Porten leser tagger linje for linje og ser ikke hele markdown-treet. Den
-// finner derfor også en tagg som muninn ikke tolker som komponent: en tagg som
-// er innrykket under et listepunkt, eller som ligger dypere enn tre
-// komponentnivåer. Da lastes en skannet fil opp som siden ikke viser.
+// Porten leser tagger linje for linje og ser ikke hele markdown-treet. Den skal
+// finne minst det muninn leser: en fil porten ikke finner, mangler i poden. Den
+// finner derfor også tagger muninn ikke tolker som komponent, for eksempel en
+// komponent mer enn tre nivåer ned, en lukketagg som krysser en beholder, eller
+// en beholder på samme linje som muninn ikke kjenner. Da lastes en skannet fil
+// opp som siden ikke viser.
 
 export type Datatype = "csv" | "sql" | "yaml";
 const DATATYPE_ENDELSER: Record<Datatype, readonly string[]> = { csv: [".csv"], sql: [".sql"], yaml: [".yaml", ".yml"] };
@@ -474,6 +482,33 @@ const DATA_KOMPONENTER = new Set(["Query", "CaseBoard", "DeltaTable"]);
 const ÅPNE_TAGG = /^<([A-Za-z][A-Za-z0-9]*)((?:\s+[A-Za-z][\w-]*="[^"]*")*)\s*(\/?)>(.*)$/;
 const ATTRIBUTT = /([A-Za-z][\w-]*)="([^"]*)"/g;
 const GJERDE = /^( {0,3})(`{3,})(.*)$/;
+/** En åpningstagg på starten av linjen, med attributter i doble eller enkle anførselstegn. */
+const BEHOLDER = /^<([A-Za-z][A-Za-z0-9]*)(?:\s+[A-Za-z][\w-]*(?:="[^"]*"|='[^']*')?)*\s*>/;
+
+/**
+ * Linjen uten beholdere rundt en datakomponent på samme linje
+ * (`<Callout tone="info"><Query … /></Callout>`): åpningstagger foran fjernes,
+ * og lukketaggene for de samme navnene bakerst. muninn leser slike linjer.
+ * Hvilke beholdere og om lukketaggene står i riktig rekkefølge, sjekkes ikke.
+ */
+function utenBeholdere(linje: string): string {
+  const navn = new Set<string>();
+  let t = linje;
+  for (let m = BEHOLDER.exec(t); m && !DATA_KOMPONENTER.has(m[1]!); m = BEHOLDER.exec(t)) {
+    navn.add(m[1]!);
+    t = t.slice(m[0].length).trimStart();
+  }
+  for (let fjernet = navn.size > 0; fjernet; ) {
+    fjernet = false;
+    for (const n of navn) {
+      if (t.endsWith(`</${n}>`)) {
+        t = t.slice(0, -`</${n}>`.length).trimEnd();
+        fjernet = true;
+      }
+    }
+  }
+  return t;
+}
 
 /** splitFrontmatter i muninn: bare når teksten starter med `---`. */
 function utenFrontmatter(tekst: string): string {
@@ -571,7 +606,7 @@ export function navngitteDatafiler(sideRel: string, tekst: string): NavngittData
     if (r) funnet.set(r, (funnet.get(r) ?? new Set()).add(type));
   };
   linjer.forEach((linje, i) => {
-    const m = ÅPNE_TAGG.exec(linje.trim());
+    const m = ÅPNE_TAGG.exec(utenBeholdere(linje.trim()));
     if (!m || !DATA_KOMPONENTER.has(m[1]!)) return;
     if (!erLukket(linjer, i, m[1]!, m[3] === "/", m[4]!)) return;
     const attr: Record<string, string> = {};
@@ -594,18 +629,24 @@ interface Celle {
   sitert: boolean;
 }
 
+interface Post {
+  celler: Celle[];
+  /** Linjeskiftet posten slutter med i kildefilen; tomt for en siste post uten linjeskift. */
+  slutt: string;
+}
+
 /**
  * CSV etter RFC 4180, som muninns `parseCsv`: felt i anførselstegn kan ha
- * komma, `""` og linjeskift. Alle poster beholdes, også tomme linjer, så
- * kopien får samme linjer minus kolonnene. Null når et anførselstegn aldri lukkes.
+ * komma, `""` og linjeskift. Alle poster beholdes, også tomme linjer, med sitt
+ * eget linjeskift, så kopien får samme linjer minus kolonnene. Null når et
+ * anførselstegn aldri lukkes.
  */
-function lesCsv(tekst: string): { poster: Celle[][]; linjeslutt: string; avsluttet: boolean } | null {
-  const poster: Celle[][] = [];
+function lesCsv(tekst: string): Post[] | null {
+  const poster: Post[] = [];
   let post: Celle[] = [];
   let felt = "";
   let sitert = false;
   let iSitat = false;
-  let linjeslutt: string | null = null;
   let i = 0;
   const nyCelle = () => {
     post.push({ tekst: felt, sitert });
@@ -614,9 +655,8 @@ function lesCsv(tekst: string): { poster: Celle[][]; linjeslutt: string; avslutt
   };
   const nyPost = (slutt: string) => {
     nyCelle();
-    poster.push(post);
+    poster.push({ celler: post, slutt });
     post = [];
-    linjeslutt ??= slutt;
   };
   while (i < tekst.length) {
     const c = tekst[i]!;
@@ -644,12 +684,8 @@ function lesCsv(tekst: string): { poster: Celle[][]; linjeslutt: string; avslutt
     i++;
   }
   if (iSitat) return null;
-  const avsluttet = felt === "" && post.length === 0 && !sitert;
-  if (!avsluttet) {
-    nyCelle();
-    poster.push(post);
-  }
-  return { poster, linjeslutt: linjeslutt ?? "\n", avsluttet };
+  if (felt !== "" || post.length > 0 || sitert) nyPost("");
+  return poster;
 }
 
 function skrivCelle(c: Celle): string {
@@ -669,23 +705,25 @@ export interface FjernetKolonne {
  * alle poster. Er ingen kolonne rammet, er teksten uendret.
  */
 export function fjernIdentKolonner(tekst: string): { tekst: string; fjernet: FjernetKolonne[] } | string {
-  const bom = tekst.startsWith("﻿") ? "﻿" : "";
-  const csv = lesCsv(tekst.slice(bom.length));
-  if (!csv) return "CSV-en har et anførselstegn som aldri lukkes, så kolonnene kan ikke skilles";
+  const poster = lesCsv(tekst);
+  if (!poster) return "CSV-en har et anførselstegn som aldri lukkes, så kolonnene kan ikke skilles";
   const treff = new Map<number, number>();
-  for (const post of csv.poster) {
-    post.forEach((celle, k) => {
+  for (const post of poster) {
+    post.celler.forEach((celle, k) => {
       if (skannTekst(celle.tekst).some((f) => f.type === "NAVident")) treff.set(k, (treff.get(k) ?? 0) + 1);
     });
   }
   if (treff.size === 0) return { tekst, fjernet: [] };
-  const overskrift = csv.poster.find((p) => !(p.length === 1 && p[0]!.tekst === "" && !p[0]!.sitert)) ?? [];
+  const bredde = Math.max(...poster.map((p) => p.celler.length));
+  if (treff.size >= bredde) {
+    return "det blir ingen kolonner igjen når kolonnene med NAVident fjernes — er filen delt med semikolon eller tabulator? Bare kommadelt CSV kan renses";
+  }
+  const overskrift = poster.find((p) => !(p.celler.length === 1 && p.celler[0]!.tekst === "" && !p.celler[0]!.sitert))?.celler ?? [];
   const fjernet = [...treff.keys()].sort((a, b) => a - b).map((k) => {
     const navn = overskrift[k]?.tekst ?? "";
-    return { navn: navn && skannTekst(navn).length === 0 ? navn : `kolonne nr. ${k + 1}`, rader: treff.get(k)! };
+    return { navn: navn && skannTekst(navn).length === 0 ? synligeTegn(navn) : `kolonne nr. ${k + 1}`, rader: treff.get(k)! };
   });
-  const linjer = csv.poster.map((p) => p.filter((_, k) => !treff.has(k)).map(skrivCelle).join(","));
-  return { tekst: bom + linjer.join(csv.linjeslutt) + (csv.avsluttet ? csv.linjeslutt : ""), fjernet };
+  return { tekst: poster.map((p) => p.celler.filter((_, k) => !treff.has(k)).map(skrivCelle).join(",") + p.slutt).join(""), fjernet };
 }
 
 /** Lokale bildestier en side viser (markdown, `<img src>`, `src=`). */
@@ -706,10 +744,17 @@ export function kollisjonsnøkkel(navn: string): string {
   return navn.normalize("NFC").toLowerCase();
 }
 
-/** Stien slik den kan skrives ut: hel, eller skjult når den har et funn. */
+const KONTROLLTEGN_ALLE = new RegExp(KONTROLLTEGN.source, "g");
+
+/** Kontroll- og retningstegn skrevet som `\u{…}`, så de ikke når terminalen. */
+export function synligeTegn(s: string): string {
+  return s.replace(KONTROLLTEGN_ALLE, (c) => `\\u{${c.codePointAt(0)!.toString(16)}}`);
+}
+
+/** Stien slik den kan skrives ut: hel med kontrolltegn synlige, eller skjult når den har et funn. */
 export function visningsnavn(rel: string, nr?: number): string {
   const funn = skannTekst(rel);
-  if (funn.length === 0) return rel;
+  if (funn.length === 0) return synligeTegn(rel);
   return `[skjult sti${nr !== undefined ? ` nr. ${nr}` : ""}: inneholder ${[...new Set(funn.map((f) => f.type))].join(", ")}]`;
 }
 
@@ -805,7 +850,11 @@ export function vurderFil(abs: string, rel: string, tillatIdent: boolean, nr?: n
     return v;
   }
   let tekst = new TextDecoder("utf-8").decode(bytes);
-  if (datafil && datatype(rel) === "csv" && skannTekst(tekst).some((f) => f.type === "NAVident")) {
+  // Kolonner fjernes bare når alle funnene i kildefilen er NAVident. Ellers
+  // avvises filen på funnene i kildefilen, så et fødselsnummer i en kolonne
+  // som også har en NAVident, ikke forsvinner med kolonnen.
+  const kildefunn = datafil && datatype(rel) === "csv" ? skannTekst(tekst) : [];
+  if (kildefunn.length > 0 && kildefunn.every((f) => f.type === "NAVident")) {
     const kopi = fjernIdentKolonner(tekst);
     if (typeof kopi === "string") {
       v.avslag.push(kopi);
@@ -814,6 +863,11 @@ export function vurderFil(abs: string, rel: string, tillatIdent: boolean, nr?: n
     v.fjernet = kopi.fjernet;
     tekst = kopi.tekst;
     bytes = Buffer.from(tekst, "utf8");
+    // Sitering og linjeskift skrives på nytt, så kopien kan bli større enn kildefilen.
+    if (bytes.length > maks) {
+      v.avslag.push(`kopien er større enn ${maks} byte etter at kolonnene er fjernet, og ville blitt hoppet over av speilet`);
+      return v;
+    }
   }
   if (!datafil && harSignalNone(tekst, path.posix.extname(rel).toLowerCase() === ".html")) v.avslag.push("siden er culled (`signal: none` eller wiki-signal=none)");
   for (const f of skannTekst(tekst)) {
@@ -1002,6 +1056,9 @@ function fjern(valg: Valg, bucket: string, o: Omgivelser): number {
     return EXIT_AVVIST;
   }
   for (const m of mål) o.ut(`vil slette gs://${bucket}/${m.visning}`);
+  if (mål.some((m) => SIDE_ENDELSER.has(path.posix.extname(m.objekt).toLowerCase()))) {
+    o.ut("(datafilene en side viser, slettes ikke med siden — oppgi dem også, ellers blir de liggende i bøtta)");
+  }
   if (valg.dryRun) {
     o.ut("\nTørrkjøring — ingenting er slettet.");
     return EXIT_OK;
@@ -1072,6 +1129,8 @@ export function kjør(argv: string[], o: Omgivelser): number {
   });
 
   // Datafilene sidene viser, i kilderekkefølge, med sidene som viser dem.
+  // Sidene står før datafilene i `vurderinger`, så de lastes opp først.
+  const sideneTil = new Map<Vurdering, Vurdering[]>();
   const visesAv = new Map<string, Vurdering[]>();
   for (const side of [...vurderinger]) {
     if (!side.bytes || ![".md", ".mdx"].includes(path.posix.extname(side.rel).toLowerCase())) continue;
@@ -1101,7 +1160,7 @@ export function kjør(argv: string[], o: Omgivelser): number {
     }
     sett.add(rel);
     const v = vurderFil(r.abs, rel, false, undefined, true);
-    if (sider.every((side) => side.avslag.length > 0)) v.avslag.push("siden som viser filen, er avvist");
+    sideneTil.set(v, sider);
     vurderinger.push(v);
   }
   for (const d of oppgittData) {
@@ -1118,6 +1177,16 @@ export function kjør(argv: string[], o: Omgivelser): number {
   for (const v of vurderinger) {
     if ((perNøkkel.get(kollisjonsnøkkel(v.objekt))?.size ?? 0) > 1) v.avslag.push("kolliderer med en annen fil i samme kjøring under små bokstaver + NFC");
   }
+
+  // En datafil avvises når alle sidene som viser den, er avvist. Kjøres etter
+  // hver sjekk som kan avvise en side.
+  const sideAvvist = "siden som viser filen, er avvist";
+  const avvisDatafilerUtenSide = () => {
+    for (const [v, sider] of sideneTil) {
+      if (sider.every((side) => side.avslag.length > 0) && !v.avslag.includes(sideAvvist)) v.avslag.push(sideAvvist);
+    }
+  };
+  avvisDatafilerUtenSide();
 
   const utskriv = (v: Vurdering) => {
     o.ut(`${v.avslag.length ? "AVVIST " : "OK     "} ${v.visning}`);
@@ -1153,6 +1222,7 @@ export function kjør(argv: string[], o: Omgivelser): number {
         );
       }
     }
+    avvisDatafilerUtenSide();
     godkjent = godkjent.filter((v) => v.avslag.length === 0);
   }
 
@@ -1162,11 +1232,20 @@ export function kjør(argv: string[], o: Omgivelser): number {
     for (const v of godkjent) o.ut(`vil laste opp gs://${bucket}/${v.visning}`);
     if (godkjent.length > 0) o.ut("(tørrkjøring: bøtta er ikke kontaktet, så kollisjoner med eksisterende objekter er ikke sjekket)");
   } else {
+    // En datafil lastes bare opp når minst én side som viser den, ble lastet opp i denne kjøringen.
+    const opplastet = new Set<Vurdering>();
     for (const v of godkjent) {
+      const sider = sideneTil.get(v);
+      if (sider && !sider.some((side) => opplastet.has(side))) {
+        feilet.push(v);
+        o.feil(`Feil: ${v.visning} er ikke lastet opp: ingen side som viser den, ble lastet opp`);
+        continue;
+      }
       const mål = `gs://${bucket}/${v.objekt}`;
       const r = o.gcloud!(["storage", "cp", `--content-type=${innholdstype(v.objekt)}`, "-", mål], v.bytes);
       if (r.exitCode === 0) {
         lastetOpp.push(v);
+        opplastet.add(v);
         o.ut(`lastet opp gs://${bucket}/${v.visning}`);
       } else {
         feilet.push(v);

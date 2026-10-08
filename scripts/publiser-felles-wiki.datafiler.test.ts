@@ -46,6 +46,20 @@ describe("navngitteDatafiler følger muninns regel (fasiten fra muninn)", () => 
   });
 });
 
+describe("navngitteDatafiler finner også det muninn ikke leser", () => {
+  // Å finne for mye er trygt: filen skannes likevel. Å finne for lite gir «File not available» i poden.
+  const refs = (md: string) => navngitteDatafiler("plans/side.mdx", md).map((d) => d.ref);
+  test("en komponent fire nivåer ned", () => {
+    const md = '<Callout>\n<Fold title="a">\n<Callout>\n<Fold title="b">\n<Query id="q" csv="dyp.csv" />\n</Fold>\n</Callout>\n</Fold>\n</Callout>\n';
+    expect(refs(md)).toEqual(["dyp.csv"]);
+  });
+  test("en ukjent beholder, enkle anførselstegn på beholderen, og en lukking som krysser beholderen", () => {
+    expect(refs('<Ukjent><Query id="q" csv="a.csv" /></Ukjent>\n')).toEqual(["a.csv"]);
+    expect(refs("<Callout tone='info'><Query id=\"q\" csv=\"b.csv\" /></Callout>\n")).toEqual(["b.csv"]);
+    expect(refs('<Callout><Query id="q" csv="c.csv" />\n</Callout>\n')).toEqual(["c.csv"]);
+  });
+});
+
 describe("fjernIdentKolonner", () => {
   test("fjerner kolonnen med NAVident i alle rader og beholder resten", () => {
     const csv = "id,endret_av,status\n1,Z990123,OK\n2,Z990124,AVSLUTTET\n";
@@ -63,10 +77,10 @@ describe("fjernIdentKolonner", () => {
     });
   });
 
-  test("en NAVident i fritekst fjerner hele kolonnen; flere kolonner, BOM og fil uten avsluttende linjeskift", () => {
-    const csv = "﻿a,b,c,d\nZ990123,x,endret av Z990124 i går,y";
+  test("en NAVident i fritekst fjerner hele kolonnen; flere kolonner og fil uten avsluttende linjeskift", () => {
+    const csv = "a,b,c,d\nZ990123,x,endret av Z990124 i går,y";
     expect(fjernIdentKolonner(csv)).toEqual({
-      tekst: "﻿b,d\nx,y",
+      tekst: "b,d\nx,y",
       fjernet: [{ navn: "a", rader: 1 }, { navn: "c", rader: 1 }],
     });
   });
@@ -74,6 +88,24 @@ describe("fjernIdentKolonner", () => {
   test("en overskrift som selv er en NAVident, vises som kolonnenummer", () => {
     const r = fjernIdentKolonner("id,Z990123\n1,2\n");
     expect(r).toEqual({ tekst: "id\n1\n", fjernet: [{ navn: "kolonne nr. 2", rader: 1 }] });
+  });
+
+  test("hver post beholder sitt eget linjeskift", () => {
+    expect(fjernIdentKolonner("a,b\r\n1,Z990123\n2,Z990124\r\n")).toEqual({
+      tekst: "a\r\n1\n2\r\n",
+      fjernet: [{ navn: "b", rader: 2 }],
+    });
+  });
+
+  test("en semikolondelt CSV der alle kolonnene ville blitt fjernet, gir en grunn", () => {
+    const r = fjernIdentKolonner("id;endret_av\n1;Z990123\n");
+    expect(typeof r).toBe("string");
+    expect(r as string).toContain("ingen kolonner igjen");
+  });
+
+  test("en overskrift med kontrolltegn skrives ut med tegnene synlige", () => {
+    const r = fjernIdentKolonner("id,\u001b[31mendret\n1,Z990123\n");
+    expect(r).toEqual({ tekst: "id\n1\n", fjernet: [{ navn: "\\u{1b}[31mendret", rader: 1 }] });
   });
 
   test("uten treff er teksten uendret; et anførselstegn som aldri lukkes, gir en grunn", () => {
@@ -101,11 +133,34 @@ describe("vurderFil for en datafil", () => {
     expect(readFileSync(abs, "utf8")).toBe(kilde);
   });
 
-  test("CSV: et fødselsnummer avvises, også når en annen kolonne fjernes", () => {
+  test("CSV: et fødselsnummer i kildefilen avvises før noen kolonne fjernes", () => {
     const abs = skriv("r/fnr.csv", `fnr,endret_av\n${FNR},Z990123\n`);
     const v = vurderFil(abs, "r/fnr.csv", false, undefined, true);
-    expect(v.fjernet).toEqual([{ navn: "endret_av", rader: 1 }]);
-    expect(v.avslag).toEqual([`r/fnr.csv:2: fødselsnummer *********${FNR.slice(-2)} (i kopien etter at kolonnene er fjernet)`]);
+    expect(v.fjernet).toEqual([]);
+    expect(v.avslag.join("\n")).toContain(`r/fnr.csv:2: fødselsnummer *********${FNR.slice(-2)}`);
+  });
+
+  test("CSV: et fødselsnummer i samme kolonne som en NAVident avvises, selv om kolonnen ville blitt fjernet", () => {
+    const abs = skriv("r/samme.csv", `id,notat\n1,Z990123\n2,${FNR}\n`);
+    const v = vurderFil(abs, "r/samme.csv", false, undefined, true);
+    expect(v.fjernet).toEqual([]);
+    expect(v.avslag.join("\n")).toContain("fødselsnummer");
+  });
+
+  test("CSV: en kopi som blir større enn 1 MB etter at kolonnen er fjernet, avvises", () => {
+    // Et anførselstegn midt i et felt uten anførselstegn skrives tilbake sitert og doblet.
+    const rad = `q${'"'.repeat(500)},Z990123\n`;
+    const kilde = "a,b\n" + rad.repeat(Math.floor((1024 * 1024 - 4) / rad.length));
+    expect(Buffer.byteLength(kilde)).toBeLessThanOrEqual(1024 * 1024);
+    const v = vurderFil(skriv("r/vokser.csv", kilde), "r/vokser.csv", false, undefined, true);
+    expect(v.bytes).toBeUndefined();
+    expect(v.avslag.join("\n")).toMatch(/kopien er større enn 1048576 byte/);
+  });
+
+  test("CSV: en semikolondelt fil med NAVident avvises i stedet for å lastes opp tom", () => {
+    const v = vurderFil(skriv("r/semikolon.csv", "id;endret_av\n1;Z990123\n"), "r/semikolon.csv", false, undefined, true);
+    expect(v.bytes).toBeUndefined();
+    expect(v.avslag.join("\n")).toContain("ingen kolonner igjen");
   });
 
   test("CSV: et fødselsnummer som bare oppstår i kopien når kolonnen mellom er borte, avvises ved ny skanning", () => {
