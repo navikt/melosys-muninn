@@ -22,7 +22,10 @@ A bot needs only a `CLAUDE.md` to be discovered. Platform tokens (Telegram,
 Slack) are what make it a *live bot*, and this one deliberately has none:
 without them no scheduler starts and no watchers run, which is exactly what a
 chat-only pod wants. **Do not add `SCHEDULER_ENABLED` to the manifest** without
-re-reading that sentence.
+re-reading that sentence. From muninn `248495bb` (#661) the variable also gates
+the hourly retention cleanup, which runs without platform tokens and deletes
+traces, prompt snapshots and chat citations; `SCHEDULER_ENABLED=false` turns
+that cleanup off, so leave it unset.
 
 ## 2. `connector` must be pinned, and must not be `claude-cli`
 

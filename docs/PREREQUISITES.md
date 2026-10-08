@@ -629,7 +629,9 @@ the `emptyDir`, and the mirror adopts the files already there.
 - **One replica, `Recreate`.** A correctness constraint, not capacity — see the
   comment in `nais/app.yaml`.
 - **No scheduler, no watchers.** They start only for bots with platform tokens,
-  and this bot has none. Do not add `SCHEDULER_ENABLED`.
+  and this bot has none. Do not add `SCHEDULER_ENABLED`: from muninn `248495bb`
+  it also gates the hourly cleanup of traces (7 days), prompt snapshots (3 days
+  chat) and chat citations, which runs on the pod, and `false` turns it off.
 - **Colleague chat content is personopplysninger, and lands in two stores** —
   `messages` and `activity_log`, both in Cloud SQL, keyed to a NAVident. The
   `nais` profile drops the log line that used to preview message text at `info`;
