@@ -357,3 +357,9 @@ spec:
       value: "30"
     - name: WIKI_ANSWER_UNEXPORTED_DAYS
       value: "90"
+    # The reader lens a viewer with no stored choice opens a wiki in (muninn
+    # #665). Overview hides code refs and developer and agent folds, so fag
+    # opens melosys-felles on the readable view. A ?lens= link and the
+    # viewer's stored choice still win. An older muninn ref ignores it.
+    - name: WIKI_DEFAULT_LENS
+      value: "melosys-felles=overview"
