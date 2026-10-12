@@ -33,15 +33,11 @@ spec:
   # keeps serving. Sockets on the old pod still drop when it stops, and its
   # in-flight turn does not come back; the client reconnects in ~2 s.
   #
-  # ⚠️ The entrypoint runs `db/migrate.ts` on every boot, so every deploy now
-  # migrates while the OLD code still serves and writes. That is safe only for
-  # expand-only migrations (new tables, nullable columns, indexes). A
-  # migration that rewrites rows, changes a column type or tightens a
-  # constraint is not: a backfill misses the rows the old pod writes after it,
-  # and a lock-taking ALTER queues behind live queries. muninn has shipped
-  # such migrations (033 and 074 backfill, 007 changes a type). Before
-  # deploying a ref with one, read docs/db-setup.md, "Migrations that are not
-  # additive".
+  # ⚠️ The entrypoint runs `db/migrate.ts` on every boot, so every deploy
+  # migrates while the OLD pod still serves and writes, for the new pod's whole
+  # boot. A migration that locks a busy table or backfills rows the old code
+  # still writes is not safe under that. Read the ref's migrations first:
+  # docs/db-setup.md, "Migrations while the old pod writes".
   replicas:
     min: 1
     max: 1

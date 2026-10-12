@@ -669,8 +669,8 @@ the `emptyDir`, and the mirror adopts the files already there.
 - **Chat-only.** No huginn on nais in v1, so the bot has no knowledge tools and
   its persona says so. See `bot-folder-notes.md` §4.
 - **One replica.** A correctness constraint, not capacity. The rollout is
-  surge-first, so two pods overlap for a few seconds per deploy. See the comment
-  in `nais/app.yaml`.
+  surge-first: during a deploy two pods run while the new one boots, and both
+  serve for a few seconds. See the comment in `nais/app.yaml`.
 - **No scheduler, no watchers.** They start only for bots with platform tokens,
   and this bot has none. Do not add `SCHEDULER_ENABLED`: from muninn `248495bb`
   it also gates the hourly cleanup of traces (7 days), prompt snapshots (3 days

@@ -249,7 +249,8 @@ and run the real one. `scripts/deploy.sh` also discards the run's log: it
 prints the run URL (`kjøring: <url>`) and then nothing until the run ends.
 Run the job after the rollout starts instead. The rollout is surge-first
 (`nais/app.yaml`), so the old pod keeps serving while the new one crash-loops,
-and the app stays up:
+and the app stays up. A ref deployed with Recreate is the exception; see
+"Migrations while the old pod writes" below:
 
 | # | Step | Who runs it | What you see |
 |---|---|---|---|
@@ -283,30 +284,41 @@ tables it does not know. The workflow run still fails in step 2. To make it pass
 build-only mode to `deploy.yml` that pushes and checks the image without
 rolling out, so the job runs before the rollout. That mode does not exist yet.
 
-## Migrations that are not additive
+## Migrations while the old pod writes
 
 The rollout is surge-first (`nais/app.yaml`), and the entrypoint runs
-`db/migrate.ts` on every boot. So every deploy migrates while the old pod still
-serves and writes, not only the deploys in the table above.
+`db/migrate.ts` on every boot, before readiness. So every deploy migrates while
+the old pod still serves and writes, for as long as the new pod boots: seconds
+normally, minutes on a ref that adds a table (the table above).
 
-That is safe for expand-only migrations: new tables, nullable columns, indexes.
-It is not safe for a migration that rewrites rows, changes a column type or
-adds a constraint:
+Read the migrations a ref brings before you deploy it. Read the ref prod runs
+with the `MUNINN_REF` command above, then run
+`git diff --name-only <prod ref> <new ref> -- db/migrations` in a muninn
+checkout. Ask two questions of each file:
 
-- A backfill misses the rows the old pod writes after it, and the ledger
-  records the migration as applied, so nothing repairs them. muninn 033 and 074
-  are backfills of this kind.
-- An `ALTER COLUMN TYPE` (muninn 007) takes an exclusive lock, queues behind
-  the old pod's queries, and blocks them while it waits.
+- **Does it lock a table the old pod uses?** `ALTER COLUMN TYPE` (muninn 007)
+  takes an ACCESS EXCLUSIVE lock and rewrites the table, so every query on it
+  waits for the whole rewrite. A plain `CREATE INDEX` (083) takes a SHARE lock,
+  so writes wait for the build; `CREATE INDEX CONCURRENTLY` does not.
+  `ADD CONSTRAINT` scans the table under its lock (076). On a small table the
+  wait is short; on a large one the table is unusable until it ends.
+- **Does it rewrite rows the old code still writes in the old shape?** A
+  backfill whose write-side fix ships in the same ref (033, 074) misses the
+  rows the old pod writes after it, and the ledger records the migration as
+  applied, so nothing repairs them.
 
-Before you deploy, list the migrations the new ref brings: read the ref prod
-runs with the `MUNINN_REF` command above, then, in a muninn checkout, run
-`git diff --name-only <prod ref> <new ref> -- db/migrations`, and read each
-file. If one is not additive, deploy that ref with `strategy: {type: Recreate}` in
-`nais/app.yaml`, which stops the old pod before the new one migrates and costs
-the boot as downtime. Switch back to surge-first in the next deploy. The team
-cannot scale the Deployment by hand: `container.deployments.update` is not
-granted.
+If either is a real risk, deploy that ref with Recreate:
+
+1. Set `strategy` in `nais/app.yaml` to `type: Recreate` and merge it to main.
+   `scripts/deploy.sh` dispatches the workflow on main, so an edit that is not
+   on main does not reach the deploy.
+2. Deploy the ref. The old pod stops first, and the app is down while the new
+   pod boots. If the ref also adds a table, the app is down from step 2 to
+   step 6 of the table above.
+3. Merge `strategy` back to surge-first before the next deploy.
+
+The team cannot scale the Deployment by hand: `container.deployments.update` is
+not granted.
 
 ## What it refuses, and why the refusal matters
 
