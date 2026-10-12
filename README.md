@@ -164,11 +164,10 @@ project owns the quota.
   a single shared SSO client ahead of the sidecar, so whether this app's group
   gate takes part in the login has to be checked once after the first deploy —
   `docs/PREREQUISITES.md` §4 has the test.
-- **The dev deployment is not managed from here any more.** `melosys-muninn-q2`
-  in dev-gcp, its Cloud SQL instance (colleague chat content), the
-  `melosys-felles-wiki-q2` bucket and its admin secret keep running until
-  someone deletes them. Pages in the dev bucket are not copied to the prod one;
-  republish them with `scripts/publiser-felles-wiki.ts`.
+- **No dev deployment.** `melosys-muninn-q2` in dev-gcp, its Cloud SQL
+  instance (colleague chat content, with its backups) and the
+  `melosys-felles-wiki-q2` bucket were deleted on 2026-10-12. Every page in
+  the dev bucket was already in the prod one.
 - **Chat, plus one read-only wiki.** `MUNINN_PROFILE=nais` drops fourteen
   route groups; the plans board, the capture verticals and the logs page are
   not registered. What is left is `/chat`, the operator dashboard, two health
