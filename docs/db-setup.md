@@ -247,16 +247,18 @@ dev-gcp, 37362902145 on prod-gcp). That window is too short to read the image
 reference, fill two manifests, apply the policy, run and read the dry-run job,
 and run the real one. `scripts/deploy.sh` also discards the run's log: it
 prints the run URL (`kjøring: <url>`) and then nothing until the run ends.
-Plan for a short outage instead:
+Run the job after the rollout starts instead. The rollout is surge-first
+(`nais/app.yaml`), so the old pod keeps serving while the new one crash-loops,
+and the app stays up:
 
 | # | Step | Who runs it | What you see |
 |---|---|---|---|
-| 1 | `make deploy` (or `scripts/deploy.sh <sha>`) with a muninn ref that adds a table | operator | The run builds, pushes and rolls out. `Recreate` stops the old pod when the rollout starts, so the app is down from then until step 6. |
+| 1 | `make deploy` (or `scripts/deploy.sh <sha>`) with a muninn ref that adds a table | operator | The run builds, pushes and rolls out. The new pod starts beside the old one, and the old one keeps serving until step 6. |
 | 2 | The rollout | — | The new pod crash-loops. The workflow's `nais/deploy` step waits for the rollout and fails, so `make deploy` stops with `workflowen feilet`. On run 37362902145 that step waited about ten minutes before it failed. Do not wait for it: watch the pod in step 3. |
-| 3 | Read the pod log, in a second terminal while `make deploy` waits | operator | `kubectl --context prod-gcp -n teammelosys get pods -l app=melosys-muninn` shows the new pod restarting. `kubectl --context prod-gcp -n teammelosys logs deploy/melosys-muninn` prints the log; add `--previous` once the container has restarted. `db/require-provisioned.ts` exits 1 and names each missing table and the migration that creates it, with `bun db/migrate.ts` as the remedy, and the entrypoint prints `[entrypoint] db/require-provisioned.ts failed (exit 1); not starting the server`. Start step 4 as soon as that refusal shows. |
+| 3 | Read the pod log, in a second terminal while `make deploy` waits | operator | `kubectl --context prod-gcp -n teammelosys get pods -l app=melosys-muninn` shows two pods: the old one `Running` and the new one restarting. Read the new pod's log by its name, `kubectl --context prod-gcp -n teammelosys logs <new pod>`, not `deploy/melosys-muninn`, which can pick the old pod; add `--previous` once the container has restarted. `db/require-provisioned.ts` exits 1 and names each missing table and the migration that creates it, with `bun db/migrate.ts` as the remedy, and the entrypoint prints `[entrypoint] db/require-provisioned.ts failed (exit 1); not starting the server`. Start step 4 as soon as that refusal shows. |
 | 4 | Read the image from the Deployment, fill in and apply `nais/migrate-netpol.yaml`, then `nais/migrate-job.yaml` as shipped | operator | The Deployment names the new image even while its pod is failing; the `image:` command in `nais/migrate-job.yaml`'s header (the same one `nais/provision-job.yaml` uses) prints it. `--dry-run`: the job prints `Database: host:port/db` and the pending migrations, for example `079-summary-factchecks.sql` through `082-wiki-answers.sql`, applies none and exits 0. |
 | 5 | Delete the job, remove its last argument (`--dry-run`), apply it again | operator | The job runs `bun db/migrate.ts` **as the app user**, applies the pending migrations and exits 0. |
-| 6 | Wait for the pod | nobody | The crash-looping pod passes `db/require-provisioned.ts` on its next retry, within five minutes, finds nothing pending and starts (`kubectl rollout restart` is not granted to the team). |
+| 6 | Wait for the pod | nobody | The crash-looping pod passes `db/require-provisioned.ts` on its next retry, within five minutes, finds nothing pending and starts. The old pod stops once the new one is ready (`kubectl rollout restart` is not granted to the team). |
 | 7 | Delete the job and the policy | operator | `kubectl delete -f nais/migrate-job.yaml -f nais/migrate-netpol.yaml` |
 
 The runner takes `pg_advisory_lock` for the whole pending list, so if the pod
@@ -275,10 +277,11 @@ nothing else.
 This is the same shape as the first rollout on 2026-10-05: an expected
 crash-loop, a Naisjob as the app user, and a pod that recovers by itself.
 
-To remove the outage, add a build-only mode to `deploy.yml` that pushes and
-checks the image without rolling out. The job then runs with that image before
-the rollout, which is safe: the migrations are additive and the old code
-ignores tables it does not know. That mode does not exist yet.
+Between steps 5 and 6 the old pod serves against the migrated schema. That is
+safe because the migrations are additive and the old code ignores tables it
+does not know. The workflow run still fails in step 2. To make it pass, add a
+build-only mode to `deploy.yml` that pushes and checks the image without
+rolling out, so the job runs before the rollout. That mode does not exist yet.
 
 ## What it refuses, and why the refusal matters
 

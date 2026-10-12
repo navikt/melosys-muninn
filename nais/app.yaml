@@ -18,26 +18,35 @@ spec:
   # number must match that ENV or every probe is refused.
   port: 3000
 
-  # ONE replica, and a Recreate rollout — a correctness constraint, not capacity.
-  # chatState, the socket registry, the LRU, agentStatus, the pending-message
-  # one-shot store and the Texas introspection cache are all process-local, so a
-  # second replica answers half the requests from an empty memory. nais defaults
-  # replicas.min to 2, and the default RollingUpdate would run two pods during
-  # every deploy even with the pin — hence Recreate, which costs one dropped
-  # socket and one in-flight turn per rollout. The client reconnects in ~2 s; the
-  # turn does not come back.
+  # ONE replica — a correctness constraint, not capacity. chatState, the socket
+  # registry, the LRU, agentStatus, the pending-message one-shot store and the
+  # Texas introspection cache are all process-local, so a second replica answers
+  # half the requests from an empty memory. nais defaults replicas.min to 2.
+  #
+  # The rollout is surge-first: the new pod starts beside the old one, and the
+  # old one stops only once the new one passes readiness. Two pods overlap for
+  # the seconds between that and the old pod leaving the endpoints; a request in
+  # that window can land on the pod that lacks its state. That is the trade for
+  # no downtime: Recreate stopped the old pod first, so every deploy was down
+  # for the whole boot, and a new pod that never got ready (a migration that
+  # adds a table, docs/db-setup.md) was an outage until it did. Now the old pod
+  # keeps serving. Sockets on the old pod still drop when it stops, and its
+  # in-flight turn does not come back; the client reconnects in ~2 s.
   replicas:
     min: 1
     max: 1
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
 
   # Both paths are muninn's OPEN zone (src/auth/zones.ts) — they answer with no
   # credential, which they must, because kubelet probes the app port directly
   # and carries none. They are deliberately NOT the same endpoint:
   # /api/live touches nothing, /api/ready reads the database. Pointing liveness
   # at a DB-reading path turns a Cloud SQL blip into a restart loop, and on a
-  # single-replica Recreate deployment that is an outage.
+  # single-replica deployment that is an outage.
   liveness:
     path: /api/live
     initialDelay: 20
@@ -304,7 +313,7 @@ spec:
     # runs the container with readOnlyRootFilesystem and mounts /tmp as an
     # emptyDir. muninn enforces the same from its side — a mirror root outside
     # os.tmpdir() is refused. The price of an emptyDir: a NEW pod (every
-    # Recreate rollout, a reschedule) starts EMPTY, and the wiki fills on the
+    # rollout, a reschedule) starts EMPTY, and the wiki fills on the
     # mirror's first poll, seconds after boot. A container restart inside the
     # same pod keeps the emptyDir, and the mirror adopts the files already
     # there. The poll interval is muninn's default,

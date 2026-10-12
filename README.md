@@ -137,7 +137,8 @@ deploy a specific tag or SHA, run `scripts/deploy.sh <tag|sha>` (prefix
 `kubectl` on context `prod-gcp` and naisdevice.
 
 A muninn ref whose migration adds a table crash-loops on rollout until
-`nais/migrate-job.yaml` has run with the new image, so expect a short outage.
+`nais/migrate-job.yaml` has run with the new image. The old pod keeps serving
+meanwhile, because the rollout is surge-first.
 The only prod deploy run so far shipped muninn `8ae738bf`; if prod still runs
 it, the next deploy of a ref at or after 082 is missing two tables:
 `summary_factchecks` (079) and `wiki_answers` (082). `docs/db-setup.md` has
