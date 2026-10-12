@@ -247,16 +247,19 @@ dev-gcp, 37362902145 on prod-gcp). That window is too short to read the image
 reference, fill two manifests, apply the policy, run and read the dry-run job,
 and run the real one. `scripts/deploy.sh` also discards the run's log: it
 prints the run URL (`kjøring: <url>`) and then nothing until the run ends.
-Plan for a short outage instead:
+Run the job after the rollout starts instead. The rollout is surge-first
+(`nais/app.yaml`), so the old pod keeps serving while the new one crash-loops,
+and the app stays up. A ref deployed with Recreate is the exception; see
+"Migrations while the old pod writes" below:
 
 | # | Step | Who runs it | What you see |
 |---|---|---|---|
-| 1 | `make deploy` (or `scripts/deploy.sh <sha>`) with a muninn ref that adds a table | operator | The run builds, pushes and rolls out. `Recreate` stops the old pod when the rollout starts, so the app is down from then until step 6. |
+| 1 | `make deploy` (or `scripts/deploy.sh <sha>`) with a muninn ref that adds a table | operator | The run builds, pushes and rolls out. The new pod starts beside the old one, and the old one keeps serving until step 6. |
 | 2 | The rollout | — | The new pod crash-loops. The workflow's `nais/deploy` step waits for the rollout and fails, so `make deploy` stops with `workflowen feilet`. On run 37362902145 that step waited about ten minutes before it failed. Do not wait for it: watch the pod in step 3. |
-| 3 | Read the pod log, in a second terminal while `make deploy` waits | operator | `kubectl --context prod-gcp -n teammelosys get pods -l app=melosys-muninn` shows the new pod restarting. `kubectl --context prod-gcp -n teammelosys logs deploy/melosys-muninn` prints the log; add `--previous` once the container has restarted. `db/require-provisioned.ts` exits 1 and names each missing table and the migration that creates it, with `bun db/migrate.ts` as the remedy, and the entrypoint prints `[entrypoint] db/require-provisioned.ts failed (exit 1); not starting the server`. Start step 4 as soon as that refusal shows. |
+| 3 | Read the pod log, in a second terminal while `make deploy` waits | operator | `kubectl --context prod-gcp -n teammelosys get pods -l app=melosys-muninn` shows two pods: the old one `Running` and the new one restarting. Read the new pod's log by its name, `kubectl --context prod-gcp -n teammelosys logs <new pod>`, not `deploy/melosys-muninn`, which can pick the old pod; add `--previous` once the container has restarted. `db/require-provisioned.ts` exits 1 and names each missing table and the migration that creates it, with `bun db/migrate.ts` as the remedy, and the entrypoint prints `[entrypoint] db/require-provisioned.ts failed (exit 1); not starting the server`. Start step 4 as soon as that refusal shows. |
 | 4 | Read the image from the Deployment, fill in and apply `nais/migrate-netpol.yaml`, then `nais/migrate-job.yaml` as shipped | operator | The Deployment names the new image even while its pod is failing; the `image:` command in `nais/migrate-job.yaml`'s header (the same one `nais/provision-job.yaml` uses) prints it. `--dry-run`: the job prints `Database: host:port/db` and the pending migrations, for example `079-summary-factchecks.sql` through `082-wiki-answers.sql`, applies none and exits 0. |
 | 5 | Delete the job, remove its last argument (`--dry-run`), apply it again | operator | The job runs `bun db/migrate.ts` **as the app user**, applies the pending migrations and exits 0. |
-| 6 | Wait for the pod | nobody | The crash-looping pod passes `db/require-provisioned.ts` on its next retry, within five minutes, finds nothing pending and starts (`kubectl rollout restart` is not granted to the team). |
+| 6 | Wait for the pod | nobody | The crash-looping pod passes `db/require-provisioned.ts` on its next retry, within five minutes, finds nothing pending and starts. The old pod stops once the new one is ready (`kubectl rollout restart` is not granted to the team). |
 | 7 | Delete the job and the policy | operator | `kubectl delete -f nais/migrate-job.yaml -f nais/migrate-netpol.yaml` |
 
 The runner takes `pg_advisory_lock` for the whole pending list, so if the pod
@@ -275,10 +278,54 @@ nothing else.
 This is the same shape as the first rollout on 2026-10-05: an expected
 crash-loop, a Naisjob as the app user, and a pod that recovers by itself.
 
-To remove the outage, add a build-only mode to `deploy.yml` that pushes and
-checks the image without rolling out. The job then runs with that image before
-the rollout, which is safe: the migrations are additive and the old code
-ignores tables it does not know. That mode does not exist yet.
+Between steps 5 and 6 the old pod serves against the migrated schema. That is
+safe for a migration that only adds tables, because the old code ignores
+tables it does not know. The workflow run still fails in step 2. To make it pass, add a
+build-only mode to `deploy.yml` that pushes and checks the image without
+rolling out, so the job runs before the rollout. That mode does not exist yet.
+
+## Migrations while the old pod writes
+
+The rollout is surge-first (`nais/app.yaml`), and the entrypoint runs
+`db/migrate.ts` on every boot, before readiness. So every deploy migrates while
+the old pod still serves and writes, and the old pod keeps writing after the
+migrations finish, until the new pod is ready and the old one stops. The
+probes start 20 s after boot, so that is tens of seconds on a normal deploy and
+minutes on a ref that adds a table (the table above).
+
+Read the migrations a ref brings before you deploy it. Read the ref prod runs
+with the `MUNINN_REF` command above, then run
+`git diff --name-only <prod ref> <new ref> -- db/migrations` in a muninn
+checkout. Ask two questions of each file:
+
+- **Does it lock a table the old pod uses?** The wait is short on a small
+  table and lasts the whole statement on a large one.
+  - `ALTER COLUMN TYPE` (muninn 007) takes ACCESS EXCLUSIVE and rewrites the
+    table: reads and writes on it wait.
+  - `ADD CONSTRAINT … CHECK` (076) takes ACCESS EXCLUSIVE while it scans the
+    table: reads and writes wait. `NOT VALID` plus a later
+    `VALIDATE CONSTRAINT` avoids the long lock.
+  - A plain `CREATE INDEX` (083) takes SHARE: writes wait, reads do not.
+    `CREATE INDEX CONCURRENTLY` blocks neither.
+- **Does it rewrite rows the old code still writes in the old shape?** A
+  backfill whose write-side fix ships in the same ref (033, 074) misses the
+  rows the old pod writes after it, and the ledger records the migration as
+  applied, so nothing repairs them.
+
+If either is a real risk, deploy that ref with Recreate:
+
+1. Replace the whole `strategy` block in `nais/app.yaml`, `rollingUpdate`
+   included, with `type: Recreate` as in `nais/step-zero/stub.yaml`, and merge
+   it to main.
+   `scripts/deploy.sh` dispatches the workflow on main, so an edit that is not
+   on main does not reach the deploy.
+2. Deploy the ref. The old pod stops first, and the app is down while the new
+   pod boots. If the ref also adds a table, the app is down from step 2 to
+   step 6 of the table above.
+3. Merge `strategy` back to surge-first before the next deploy.
+
+The team cannot scale the Deployment by hand: `container.deployments.update` is
+not granted.
 
 ## What it refuses, and why the refusal matters
 

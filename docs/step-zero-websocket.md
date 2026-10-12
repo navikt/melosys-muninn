@@ -192,9 +192,10 @@ zero does not deploy, at the exact moment the transport really had failed.
    reconnect right after a re-dispatch is not a bug. (This item was carried over
    from the muninn-describing draft while `stub.yaml` declared no `strategy` at
    all — so nais defaulted it to RollingUpdate and the sentence was false of
-   what was deployed. `stub.yaml` now carries `strategy: Recreate`, matching the
-   real app, which is also what stops a second echo pod flipping the ingress
-   endpoint list mid-test.)
+   what was deployed. `stub.yaml` now carries `strategy: Recreate`, which is
+   also what stops a second echo pod flipping the ingress endpoint list
+   mid-test. The real app no longer matches it: since 2026-10 `app.yaml` rolls
+   out surge-first.)
 4. **The image did not pull.** `ImagePullBackOff` reads like a registry
    permission problem and usually is not. `step-zero.yml` now guards the
    placeholder case and asserts the pushed reference is digest-pinned, so what

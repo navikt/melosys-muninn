@@ -656,7 +656,7 @@ then fix the local copy, then check the URL returns no page.
    binding is missing. Then open the URL above.
 
 **Only a new pod starts empty.** `/tmp` is an `emptyDir`, so a new pod — every
-`Recreate` rollout, a reschedule — begins with no pages and the first poll
+rollout, a reschedule — begins with no pages and the first poll
 after boot fills the wiki again. A container restart inside the same pod keeps
 the `emptyDir`, and the mirror adopts the files already there.
 
@@ -668,8 +668,9 @@ the `emptyDir`, and the mirror adopts the files already there.
   Retention of colleague chat content is still open; see `SECURITY.md`.
 - **Chat-only.** No huginn on nais in v1, so the bot has no knowledge tools and
   its persona says so. See `bot-folder-notes.md` §4.
-- **One replica, `Recreate`.** A correctness constraint, not capacity — see the
-  comment in `nais/app.yaml`.
+- **One replica.** A correctness constraint, not capacity. The rollout is
+  surge-first: during a deploy two pods run while the new one boots, and both
+  serve for a few seconds. See the comment in `nais/app.yaml`.
 - **No scheduler, no watchers.** They start only for bots with platform tokens,
   and this bot has none. Do not add `SCHEDULER_ENABLED`: from muninn `248495bb`
   it also gates the hourly cleanup of traces (7 days), prompt snapshots (3 days
