@@ -34,8 +34,8 @@ spec:
   # in-flight turn does not come back; the client reconnects in ~2 s.
   #
   # ⚠️ The entrypoint runs `db/migrate.ts` on every boot, so every deploy
-  # migrates while the OLD pod still serves and writes, for the new pod's whole
-  # boot. A migration that locks a busy table or backfills rows the old code
+  # migrates while the OLD pod still serves and writes, until the new pod is
+  # ready and the old one stops. A migration that locks a busy table or backfills rows the old code
   # still writes is not safe under that. Read the ref's migrations first:
   # docs/db-setup.md, "Migrations while the old pod writes".
   replicas:

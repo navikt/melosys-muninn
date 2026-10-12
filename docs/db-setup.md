@@ -288,20 +288,25 @@ rolling out, so the job runs before the rollout. That mode does not exist yet.
 
 The rollout is surge-first (`nais/app.yaml`), and the entrypoint runs
 `db/migrate.ts` on every boot, before readiness. So every deploy migrates while
-the old pod still serves and writes, for as long as the new pod boots: seconds
-normally, minutes on a ref that adds a table (the table above).
+the old pod still serves and writes, and the old pod keeps writing after the
+migrations finish, until the new pod is ready and the old one stops. The
+probes start 20 s after boot, so that is tens of seconds on a normal deploy and
+minutes on a ref that adds a table (the table above).
 
 Read the migrations a ref brings before you deploy it. Read the ref prod runs
 with the `MUNINN_REF` command above, then run
 `git diff --name-only <prod ref> <new ref> -- db/migrations` in a muninn
 checkout. Ask two questions of each file:
 
-- **Does it lock a table the old pod uses?** `ALTER COLUMN TYPE` (muninn 007)
-  takes an ACCESS EXCLUSIVE lock and rewrites the table, so every query on it
-  waits for the whole rewrite. A plain `CREATE INDEX` (083) takes a SHARE lock,
-  so writes wait for the build; `CREATE INDEX CONCURRENTLY` does not.
-  `ADD CONSTRAINT` scans the table under its lock (076). On a small table the
-  wait is short; on a large one the table is unusable until it ends.
+- **Does it lock a table the old pod uses?** The wait is short on a small
+  table and lasts the whole statement on a large one.
+  - `ALTER COLUMN TYPE` (muninn 007) takes ACCESS EXCLUSIVE and rewrites the
+    table: reads and writes on it wait.
+  - `ADD CONSTRAINT … CHECK` (076) takes ACCESS EXCLUSIVE while it scans the
+    table: reads and writes wait. `NOT VALID` plus a later
+    `VALIDATE CONSTRAINT` avoids the long lock.
+  - A plain `CREATE INDEX` (083) takes SHARE: writes wait, reads do not.
+    `CREATE INDEX CONCURRENTLY` blocks neither.
 - **Does it rewrite rows the old code still writes in the old shape?** A
   backfill whose write-side fix ships in the same ref (033, 074) misses the
   rows the old pod writes after it, and the ledger records the migration as
@@ -309,7 +314,9 @@ checkout. Ask two questions of each file:
 
 If either is a real risk, deploy that ref with Recreate:
 
-1. Set `strategy` in `nais/app.yaml` to `type: Recreate` and merge it to main.
+1. Replace the whole `strategy` block in `nais/app.yaml`, `rollingUpdate`
+   included, with `type: Recreate` as in `nais/step-zero/stub.yaml`, and merge
+   it to main.
    `scripts/deploy.sh` dispatches the workflow on main, so an edit that is not
    on main does not reach the deploy.
 2. Deploy the ref. The old pod stops first, and the app is down while the new
