@@ -23,13 +23,21 @@
  *   - `uendret`: siden og hver datafil den viser, er lik bøtta.
  *   - `endret`: siden eller en datafil den viser, er ulik bøtta eller ikke
  *     lastet opp ennå. Mangler bøtta MD5 (et sammensatt objekt), regnes filen
- *     som endret.
+ *     som endret. En datafil siden viser som er slettet lokalt, men fortsatt
+ *     ligger i bøtta, gjør også siden endret, med en `--fjern`-linje i
+ *     advarselen: `--synk` sletter aldri, så bare `--fjern` rydder den.
  *   - `avvist`: sjekken avviser siden eller en datafil den viser nå, også mot
  *     navnene i bøtta. `--tillat-ident` virker som ved publisering.
- *   - `mangler-lokalt`: siden ligger i bøtta, men ikke under wiki-roten.
- * Datafiler i bøtta som ingen fulgt side med lokal fil viser lenger, listes
- * som foreldreløse, med en `--fjern`-linje. Exit-kode 0 når statusen ble
- * laget, uansett tilstander.
+ *   - `mangler-lokalt`: siden ligger i bøtta, men ikke under wiki-roten med
+ *     nøyaktig samme navn (store og små bokstaver teller, også der filsystemet
+ *     ikke skiller dem; navnene sammenlignes i NFC).
+ * Datafiler i bøtta som ingen fulgt side viser lenger, listes som foreldreløse,
+ * med en sitert `--fjern`-linje. Kunne en fulgt .md- eller .mdx-side ikke leses
+ * (avvist før lesing, for eksempel for stor eller en symlenke, eller
+ * `mangler-lokalt`), kan den vise hvilken som helst datafil i bøtta. Da er
+ * ingen datafil sikkert foreldreløs: de som ingen lest side viser, listes som
+ * mulig foreldreløse, uten `--fjern`-linje. Exit-kode 0 når statusen ble laget,
+ * uansett tilstander.
  *
  * `--status --json` skriver ett JSON-objekt på stdout og ingenting annet:
  *   { "bøtte": string,
@@ -38,17 +46,24 @@
  *                 "endredeFiler": string[],   // siden og/eller datafilene som er ulik bøtta
  *                 "avslag": string[],         // tom unntatt for avvist
  *                 "advarsler": string[] }],
- *     "foreldreløse": string[] }
+ *     "foreldreløse": string[],          // sikre: ingen fulgt side kan vise dem
+ *     "muligensForeldreløse": string[] }  // ingen lest side viser dem, men en ulest side kan
  * `sider` er sortert på objektnavn. Hver sti med funn skrives maskert som
  * ellers (`[skjult sti: …]`), også i JSON. Ved feil (exit 2) er stdout tom og
  * feilen står på stderr.
  *
  * `--synk` lager statusen og publiserer så nøyaktig de endrede sidene på
- * vanlig måte, med datafilene de viser. Avviste sider og sider som mangler
- * lokalt, rapporteres, men publiseres ikke. Med `--dry-run` lastes ingenting
- * opp, men bøtta listes for å lage statusen. Exit-kode: 3 når en opplasting
- * feilet, ellers 1 når en side er avvist i statusen eller publiseringen, ellers
- * 0 (også når ingenting er endret).
+ * vanlig måte. En endret side lastes alltid opp; en datafil den viser, bare når
+ * MD5 er ulik bøtta eller filen mangler der. En datafil lastes dermed aldri opp
+ * uten at en side som viser den, er endret og lastes opp i samme kjøring. En
+ * side som er endret bare fordi en datafil er slettet lokalt, lastes opp på
+ * nytt uendret, og datafilen blir liggende i bøtta. Avviste sider og sider som
+ * mangler lokalt, rapporteres, men publiseres ikke, og oppsummeringen teller
+ * dem. Med `--dry-run` lastes ingenting opp, men bøtta listes for å lage
+ * statusen. Exit-kode: 2 når bøtta ikke kan listes, gcloud mangler eller
+ * listen har uventet form (ingenting er lastet opp); 3 når en opplasting
+ * feilet; ellers 1 når en side er avvist i statusen eller publiseringen;
+ * ellers 0 (også når ingenting er endret).
  *
  * Skanneren er det eneste automatiske vernet mot personopplysninger: poden viser
  * alt i bøtta til hele teamet. Hver fil sjekkes, og en fil som feiler, lastes
@@ -106,7 +121,7 @@
  * `felles_wiki_bucket` i nais/vars.json. Ingen avhengigheter utover Bun og
  * `gcloud`.
  */
-import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 
@@ -1097,10 +1112,13 @@ export interface Objekt {
  * har ikke noe flagg som bare gir de levende (`--stat` endrer utdataformatet),
  * så en versjon med `noncurrent_time` hoppes over her — speilet ser den ikke.
  * En liste med en annen form enn ventet avviser hele kjøringen, i stedet for
- * å sjekke mot en liste som kanskje mangler navn.
+ * å sjekke mot en liste som kanskje mangler navn. `md5_hash` hentes bare for
+ * statusen (`medMd5`), og en verdi som ikke er en streng, regnes som manglende
+ * MD5 — publiseringen lister bøtta som før.
  */
-function listObjekter(bucket: string, o: Omgivelser): Objekt[] | string {
-  const r = o.gcloud!(["storage", "objects", "list", `gs://${bucket}/**`, "--format=json(name,md5_hash,noncurrent_time)"]);
+function listObjekter(bucket: string, o: Omgivelser, medMd5 = false): Objekt[] | string {
+  const format = medMd5 ? "--format=json(name,md5_hash,noncurrent_time)" : "--format=json(name,noncurrent_time)";
+  const r = o.gcloud!(["storage", "objects", "list", `gs://${bucket}/**`, format]);
   if (r.exitCode !== 0) return `gcloud storage objects list feilet (exit ${r.exitCode}): ${maskerGcloud(r.stderr, [])}`;
   let data: unknown;
   try {
@@ -1114,10 +1132,9 @@ function listObjekter(bucket: string, o: Omgivelser): Objekt[] | string {
     if (typeof x !== "object" || x === null || typeof (x as { name?: unknown }).name !== "string") {
       return "objektlisten fra gcloud har en oppføring uten navn";
     }
-    const md5 = (x as { md5_hash?: unknown }).md5_hash;
-    if (md5 != null && typeof md5 !== "string") return "objektlisten fra gcloud har en oppføring med ugyldig md5_hash";
     if ((x as { noncurrent_time?: unknown }).noncurrent_time != null) continue;
-    ut.push({ navn: (x as { name: string }).name, md5: md5 || null });
+    const md5 = (x as { md5_hash?: unknown }).md5_hash;
+    ut.push({ navn: (x as { name: string }).name, md5: typeof md5 === "string" && md5 !== "" ? md5 : null });
   }
   return ut;
 }
@@ -1201,6 +1218,8 @@ interface Kjøring {
   datafilerTil: Map<Vurdering, Vurdering[]>;
   /** Stiene (under roten) til hver datafil sidene viser, også de som ikke finnes. */
   navngitt: Set<string>;
+  /** Hver side med stiene til datafilene den viser som ikke finnes lokalt. */
+  manglerTil: Map<Vurdering, string[]>;
   /** Avviser en datafil når alle sidene som viser den, er avvist. Kjøres etter hver sjekk som kan avvise en side. */
   avvisDatafilerUtenSide: () => void;
 }
@@ -1210,23 +1229,26 @@ const SIDE_AVVIST = "siden som viser filen, er avvist";
 /**
  * Vurderer stiene og datafilene sidene viser, slik publiseringen gjør det før
  * bøtta kontaktes: sti, skanning, CSV-rensing og kollisjoner innad i kjøringen.
+ * `nummerer`: en maskert sti får løpenummeret fra kommandolinjen (statusen har ingen).
  */
-function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIdent: boolean): Kjøring {
+function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIdent: boolean, nummerer = true): Kjøring {
   const vurderinger: Vurdering[] = [];
   const sett = new Set<string>();
   // En datafil oppgitt alene vurderes etter sidene: den slipper bare gjennom
   // når en side i samme kjøring viser den.
-  const oppgittData: { rel: string; nr: number }[] = [];
-  stier.forEach((s, i) => {
+  const oppgittData: { rel: string; nr: number | undefined }[] = [];
+  stier.forEach((s, indeks) => {
+    const i = nummerer ? indeks : undefined;
+    const nr = i === undefined ? undefined : i + 1;
     const r = relUnder(rot, oppgitt, s);
     if (typeof r === "string") {
-      vurderinger.push({ rel: s, objekt: s, visning: visningsnavn(s, i + 1), avslag: [r], advarsler: [], fjernet: [] });
+      vurderinger.push({ rel: s, objekt: s, visning: visningsnavn(s, nr), avslag: [r], advarsler: [], fjernet: [] });
       return;
     }
     if (sett.has(r.rel)) return;
     sett.add(r.rel);
-    if (datatype(r.rel) !== null) oppgittData.push({ rel: r.rel, nr: i + 1 });
-    else vurderinger.push(vurderFil(r.abs, r.rel, tillatIdent, i + 1));
+    if (datatype(r.rel) !== null) oppgittData.push({ rel: r.rel, nr });
+    else vurderinger.push(vurderFil(r.abs, r.rel, tillatIdent, nr));
   });
 
   // Datafilene sidene viser, i kilderekkefølge, med sidene som viser dem.
@@ -1234,6 +1256,7 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
   const sideneTil = new Map<Vurdering, Vurdering[]>();
   const visesAv = new Map<string, Vurdering[]>();
   const datafilerTil = new Map<Vurdering, Vurdering[]>();
+  const manglerTil = new Map<Vurdering, string[]>();
   const knytt = (v: Vurdering, sider: Vurdering[]) => {
     for (const side of sider) datafilerTil.set(side, [...(datafilerTil.get(side) ?? []), v]);
   };
@@ -1262,7 +1285,10 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
       finnes = false;
     }
     if (!finnes) {
-      for (const side of sider) side.advarsler.push(`${visningsnavn(rel)}: filen finnes ikke — kortet viser «File not available»`);
+      for (const side of sider) {
+        side.advarsler.push(`${visningsnavn(rel)}: filen finnes ikke — kortet viser «File not available»`);
+        manglerTil.set(side, [...(manglerTil.get(side) ?? []), rel]);
+      }
       continue;
     }
     sett.add(rel);
@@ -1292,7 +1318,7 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
     }
   };
   avvisDatafilerUtenSide();
-  return { vurderinger, sideneTil, datafilerTil, navngitt: new Set([...visesAv.keys()].map((r) => r.normalize("NFC"))), avvisDatafilerUtenSide };
+  return { vurderinger, sideneTil, datafilerTil, navngitt: new Set([...visesAv.keys()].map((r) => r.normalize("NFC"))), manglerTil, avvisDatafilerUtenSide };
 }
 
 /** Avviser hver godkjent fil som kolliderer med et annet levende objekt i bøtta under små bokstaver + NFC. */
@@ -1312,9 +1338,19 @@ function avvisKollisjonerMotBøtta(godkjent: Vurdering[], eksisterende: string[]
 
 // ── Publisering ──────────────────────────────────────────────────
 
-function publiser(valg: Valg, bucket: string, rot: string, oppgitt: string, stier: string[], o: Omgivelser): number {
+/** Det `--synk` gir publiseringen fra statusen. */
+interface SynkInfo {
+  /** MD5 per objekt i bøtta (null: bøtta oppgir ingen). En datafil med samme MD5 lastes ikke opp. */
+  md5: Map<string, string | null>;
+  /** Sider avvist i statusen; de telles som avvist i oppsummeringen. */
+  avvistIStatus: number;
+  manglerLokalt: number;
+}
+
+function publiser(valg: Valg, bucket: string, rot: string, oppgitt: string, stier: string[], o: Omgivelser, synk?: SynkInfo): number {
   const ingress = typeof o.vars.ingress === "string" ? o.vars.ingress : "https://melosys-muninn.ansatt.nav.no";
-  const { vurderinger, sideneTil, avvisDatafilerUtenSide } = vurderKjøring(rot, oppgitt, stier, valg.tillatIdent);
+  // Synk sender stiene fra statusen, ikke fra kommandolinjen, så de får ikke løpenummer.
+  const { vurderinger, sideneTil, avvisDatafilerUtenSide } = vurderKjøring(rot, oppgitt, stier, valg.tillatIdent, synk === undefined);
 
   const utskriv = (v: Vurdering) => {
     o.ut(`${v.avslag.length ? "AVVIST " : "OK     "} ${v.visning}`);
@@ -1346,13 +1382,24 @@ function publiser(valg: Valg, bucket: string, rot: string, oppgitt: string, stie
 
   vurderinger.forEach(utskriv);
 
+  // Synk: en datafil som er lik bøtta, lastes ikke opp på nytt.
+  const likBøtta = (v: Vurdering) => synk !== undefined && sideneTil.has(v) && v.bytes !== undefined && synk.md5.get(v.objekt) === md5Base64(v.bytes);
+  for (const v of godkjent) if (likBøtta(v)) o.ut(`uendret i bøtta, lastes ikke opp: ${v.visning}`);
+  const tilOpplasting = godkjent.filter((v) => !likBøtta(v));
+
   if (valg.dryRun) {
-    for (const v of godkjent) o.ut(`vil laste opp gs://${bucket}/${v.visning}`);
-    if (godkjent.length > 0) o.ut("(tørrkjøring: bøtta er ikke kontaktet, så kollisjoner med eksisterende objekter er ikke sjekket)");
+    for (const v of tilOpplasting) o.ut(`vil laste opp gs://${bucket}/${v.visning}`);
+    if (tilOpplasting.length > 0) {
+      o.ut(
+        synk
+          ? "(tørrkjøring: ingenting er lastet opp; bøtta er listet, og kollisjoner med eksisterende objekter er sjekket i statusen over)"
+          : "(tørrkjøring: bøtta er ikke kontaktet, så kollisjoner med eksisterende objekter er ikke sjekket)",
+      );
+    }
   } else {
     // En datafil lastes bare opp når minst én side som viser den, ble lastet opp i denne kjøringen.
     const opplastet = new Set<Vurdering>();
-    for (const v of godkjent) {
+    for (const v of tilOpplasting) {
       const sider = sideneTil.get(v);
       if (sider && !sider.some((side) => opplastet.has(side))) {
         feilet.push(v);
@@ -1372,20 +1419,21 @@ function publiser(valg: Valg, bucket: string, rot: string, oppgitt: string, stie
     }
   }
 
-  const sider = (valg.dryRun ? godkjent : lastetOpp).filter((v) => SIDE_ENDELSER.has(path.posix.extname(v.objekt).toLowerCase()));
+  const sider = (valg.dryRun ? tilOpplasting : lastetOpp).filter((v) => SIDE_ENDELSER.has(path.posix.extname(v.objekt).toLowerCase()));
   if (sider.length > 0) {
     o.ut(valg.dryRun ? "\nTørrkjøring — ingenting er lastet opp. Adresser etter publisering:" : "\nPublisert. Speilet i poden henter endringer omtrent hvert 2. minutt:");
     // En sti med funn, også en som --tillat-ident slapp gjennom, vises maskert her som overalt ellers.
     for (const v of sider) o.ut(`  ${ingress}/wiki?wiki=melosys-felles&relPath=${v.visning === v.rel ? encodeURIComponent(v.objekt) : v.visning}`);
   }
-  const avvist = vurderinger.filter((v) => v.avslag.length > 0);
+  const avvist = vurderinger.filter((v) => v.avslag.length > 0).length + (synk?.avvistIStatus ?? 0);
+  const mangler = synk ? `, ${synk.manglerLokalt} mangler lokalt` : "";
   o.ut(
     valg.dryRun
-      ? `\nOppsummering: ${godkjent.length} klar(e), ${avvist.length} avvist.`
-      : `\nOppsummering: ${lastetOpp.length} lastet opp, ${avvist.length} avvist, ${feilet.length} feilet.`,
+      ? `\nOppsummering: ${tilOpplasting.length} klar(e), ${avvist} avvist${mangler}.`
+      : `\nOppsummering: ${lastetOpp.length} lastet opp, ${avvist} avvist, ${feilet.length} feilet${mangler}.`,
   );
   if (feilet.length > 0) return EXIT_FEILET;
-  if (avvist.length > 0) return EXIT_AVVIST;
+  if (avvist > 0) return EXIT_AVVIST;
   return EXIT_OK;
 }
 
@@ -1406,20 +1454,36 @@ export interface SideStatus {
 export interface Status {
   bøtte: string;
   sider: SideStatus[];
-  /** Datafiler i bøtta som ingen fulgt side med lokal fil viser, maskert. */
+  /** Datafiler i bøtta som ingen fulgt side viser, maskert. Tom når en fulgt side ikke kunne leses. */
   foreldreløse: string[];
+  /** Datafiler i bøtta som ingen lest side viser, når en fulgt side ikke kunne leses og kan vise dem, maskert. */
+  muligensForeldreløse: string[];
 }
 
 interface StatusResultat {
   status: Status;
-  /** Objektnavnene (umaskert) til sidene som er endret, til `--synk`. */
+  /** De lokale stiene (umaskert) til sidene som er endret, til `--synk`. */
   endredeObjekter: string[];
-  /** Objektnavnene (umaskert) til de foreldreløse datafilene, til `--fjern`-linjen. */
+  /** Objektnavnene (umaskert) til de sikre foreldreløse datafilene, til `--fjern`-linjen. */
   foreldreløseObjekter: string[];
+  /** MD5 per objekt i bøtta, til `--synk`. */
+  md5: Map<string, string | null>;
+  /** Hvor mange fulgte .md- og .mdx-sider som ikke kunne leses. */
+  ulesteSider: number;
 }
 
 function md5Base64(bytes: Uint8Array): string {
   return createHash("md5").update(bytes).digest("base64");
+}
+
+/** Ett argument for sh, bash og zsh: uendret med bare trygge tegn, ellers i enkle anførselstegn. */
+export function skallsitat(s: string): string {
+  return /^[A-Za-z0-9_/.,:@%+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Kommandolinjen for skriptet med argumentene sitert. */
+function kommando(args: string[]): string {
+  return `bun scripts/publiser-felles-wiki.ts ${args.map(skallsitat).join(" ")}`;
 }
 
 /** Følges: en side (.md .mdx .html) hvor som helst, eller leserkonfigen på rotnivå. */
@@ -1427,30 +1491,57 @@ function erFulgt(navn: string): boolean {
   return navn === LESER_KONFIG || SIDE_ENDELSER.has(endelse(navn));
 }
 
+/**
+ * Den lokale stien som har nøyaktig objektnavnet i hvert ledd (NFC-sammenlignet),
+ * eller null. `lstat` er ikke nok: på et filsystem som ikke skiller store og små
+ * bokstaver, finner den `Plan.md` for objektet `plan.md`.
+ */
+function lokalSti(rot: string, navn: string, mapper: Map<string, string[] | null>): string | null {
+  let cur = rot;
+  const deler: string[] = [];
+  for (const ledd of navn.split("/")) {
+    let oppføringer = mapper.get(cur);
+    if (oppføringer === undefined) {
+      try {
+        oppføringer = readdirSync(cur);
+      } catch {
+        oppføringer = null;
+      }
+      mapper.set(cur, oppføringer);
+    }
+    const nfc = ledd.normalize("NFC");
+    const treff = oppføringer?.includes(ledd) ? ledd : oppføringer?.find((e) => e.normalize("NFC") === nfc);
+    if (treff === undefined) return null;
+    deler.push(treff);
+    cur = path.join(cur, treff);
+  }
+  return deler.join("/");
+}
+
 /** Statusen for hver fulgte side i bøtta, eller en feilmelding (bøtta kunne ikke listes). */
 function lagStatus(bucket: string, rot: string, tillatIdent: boolean, o: Omgivelser): StatusResultat | string {
   if (!o.gcloud) return "finner ikke gcloud på PATH";
-  const objekter = listObjekter(bucket, o);
+  const objekter = listObjekter(bucket, o, true);
   if (typeof objekter === "string") return objekter;
   const md5 = new Map(objekter.map((x) => [x.navn, x.md5]));
 
   const fulgte = objekter.map((x) => x.navn).filter(erFulgt).sort();
-  const lokale: string[] = [];
+  const lokale: { objekt: string; lokal: string }[] = [];
   const sider: (SideStatus & { objekt: string })[] = [];
+  // En .md- eller .mdx-side som ikke ble lest, kan vise datafiler; da er ingen datafil sikkert foreldreløs.
+  let ulesteSider = 0;
+  const kanViseData = (navn: string) => [".md", ".mdx"].includes(endelse(navn));
+  const mapper = new Map<string, string[] | null>();
   for (const navn of fulgte) {
-    let finnes = true;
-    try {
-      lstatSync(path.join(rot, navn));
-    } catch {
-      finnes = false;
-    }
     const form = sjekkStiform(navn);
+    const lokal = form ? null : lokalSti(rot, navn, mapper);
     if (form) sider.push({ objekt: navn, relPath: visningsnavn(navn), tilstand: "avvist", endredeFiler: [], avslag: [form], advarsler: [] });
-    else if (finnes) lokale.push(navn);
+    else if (lokal !== null) lokale.push({ objekt: navn, lokal });
     else sider.push({ objekt: navn, relPath: visningsnavn(navn), tilstand: "mangler-lokalt", endredeFiler: [], avslag: [], advarsler: [] });
+    if (lokal === null && kanViseData(navn)) ulesteSider++;
   }
 
-  const k = vurderKjøring(rot, rot, lokale, tillatIdent);
+  const k = vurderKjøring(rot, rot, lokale.map((l) => l.lokal), tillatIdent, false);
   avvisKollisjonerMotBøtta(
     k.vurderinger.filter((v) => v.avslag.length === 0),
     objekter.map((x) => x.navn),
@@ -1459,19 +1550,17 @@ function lagStatus(bucket: string, rot: string, tillatIdent: boolean, o: Omgivel
 
   /** Legger filen til `endredeFiler` når byteene publiseringen ville lastet opp, er ulik bøtta. */
   const sammenlign = (v: Vurdering, s: SideStatus) => {
-    // Uten løpenummer: det viser til en sti på kommandolinjen, og statusen har ingen.
-    const visning = visningsnavn(v.rel);
     const fasit = md5.get(v.objekt);
-    if (fasit === undefined) s.advarsler.push(`${visning}: ikke lastet opp ennå`);
-    else if (fasit === null) s.advarsler.push(`${visning}: bøtta oppgir ingen MD5 (sammensatt objekt), så filen regnes som endret`);
+    if (fasit === undefined) s.advarsler.push(`${v.visning}: ikke lastet opp ennå`);
+    else if (fasit === null) s.advarsler.push(`${v.visning}: bøtta oppgir ingen MD5 (sammensatt objekt), så filen regnes som endret`);
     else if (md5Base64(v.bytes!) === fasit) return;
-    s.endredeFiler.push(visning);
+    s.endredeFiler.push(v.visning);
   };
 
   const endredeObjekter: string[] = [];
-  for (const navn of lokale) {
-    const side = k.vurderinger.find((v) => v.rel === navn);
-    const s: SideStatus & { objekt: string } = { objekt: navn, relPath: visningsnavn(navn), tilstand: "uendret", endredeFiler: [], avslag: [], advarsler: [] };
+  for (const { objekt, lokal } of lokale) {
+    const side = k.vurderinger.find((v) => v.rel === lokal);
+    const s: SideStatus & { objekt: string } = { objekt, relPath: visningsnavn(objekt), tilstand: "uendret", endredeFiler: [], avslag: [], advarsler: [] };
     sider.push(s);
     if (!side) {
       // Skal ikke skje: hvert navn i bøtta er unikt, og vurderKjøring gir en vurdering per sti.
@@ -1479,8 +1568,13 @@ function lagStatus(bucket: string, rot: string, tillatIdent: boolean, o: Omgivel
       s.avslag.push("siden ble ikke vurdert");
       continue;
     }
-    s.advarsler.push(...side.advarsler);
-    const datafiler = k.datafilerTil.get(side) ?? [];
+    if (!side.bytes && kanViseData(objekt)) ulesteSider++;
+    // `d.csv` og `./d.csv` er samme fil: hver fil står én gang.
+    const datafiler = [...new Set(k.datafilerTil.get(side) ?? [])];
+    // Slettet lokalt, men fortsatt i bøtta: poden viser den gamle filen, ikke «File not available».
+    const iBøtta = [...new Set(k.manglerTil.get(side) ?? [])].filter((rel) => md5.has(rel.normalize("NFC")));
+    const feilAdvarsel = new Set(iBøtta.map((rel) => `${visningsnavn(rel)}: filen finnes ikke — kortet viser «File not available»`));
+    s.advarsler.push(...new Set(side.advarsler.filter((a) => !feilAdvarsel.has(a))));
     s.avslag.push(...side.avslag);
     // Et skannerfunn starter allerede med filens visning (`sti:linje: …`); andre avslag får den foran.
     for (const d of datafiler) for (const a of d.avslag) if (a !== SIDE_AVVIST) s.avslag.push(a.startsWith(`${d.visning}:`) ? a : `${d.visning}: ${a}`);
@@ -1489,25 +1583,38 @@ function lagStatus(bucket: string, rot: string, tillatIdent: boolean, o: Omgivel
       continue;
     }
     for (const v of [side, ...datafiler]) sammenlign(v, s);
+    for (const rel of iBøtta) {
+      const visning = visningsnavn(rel);
+      const objektnavn = rel.normalize("NFC");
+      s.endredeFiler.push(visning);
+      s.advarsler.push(
+        `${visning}: finnes ikke lokalt, men ligger fortsatt i bøtta, og kortet viser den gamle filen. --synk sletter aldri; ` +
+          (visning === objektnavn ? `fjern den med: ${kommando(["--fjern", "--", objektnavn])}` : "fjern den med --fjern (stien er skjult her)"),
+      );
+    }
     if (s.endredeFiler.length > 0) {
       s.tilstand = "endret";
-      endredeObjekter.push(navn);
+      endredeObjekter.push(lokal);
     }
   }
   sider.sort((a, b) => (a.objekt < b.objekt ? -1 : a.objekt > b.objekt ? 1 : 0));
 
-  const foreldreløseObjekter = objekter
+  const uten = objekter
     .map((x) => x.navn)
     .filter((n) => datatype(n) !== null && !k.navngitt.has(n.normalize("NFC")))
     .sort();
+  const foreldreløseObjekter = ulesteSider > 0 ? [] : uten;
   return {
     status: {
       bøtte: bucket,
       sider: sider.map(({ objekt: _, ...s }) => s),
       foreldreløse: foreldreløseObjekter.map((n) => visningsnavn(n)),
+      muligensForeldreløse: ulesteSider > 0 ? uten.map((n) => visningsnavn(n)) : [],
     },
     endredeObjekter,
     foreldreløseObjekter,
+    md5,
+    ulesteSider,
   };
 }
 
@@ -1518,7 +1625,8 @@ const TILSTAND_ETIKETT: Record<Tilstand, string> = {
   "mangler-lokalt": "MANGLER LOKALT",
 };
 
-function skrivStatus(r: StatusResultat, rotArg: string, o: Omgivelser): void {
+/** `hint`: valgene `--status` ble kjørt med, så synk-forslaget får de samme; null under `--synk`. */
+function skrivStatus(r: StatusResultat, rotArg: string, hint: Valg | null, o: Omgivelser): void {
   const { status } = r;
   o.ut(`Status for gs://${status.bøtte}: ${status.sider.length} fulgt(e) side(r)`);
   for (const s of status.sider) {
@@ -1532,15 +1640,26 @@ function skrivStatus(r: StatusResultat, rotArg: string, o: Omgivelser): void {
     for (const f of status.foreldreløse) o.ut(`FORELDRELØS     ${f}`);
     // En sti med funn skrives aldri ut, så den kan ikke stå i forslaget.
     const visbare = r.foreldreløseObjekter.filter((n) => visningsnavn(n) === n);
-    if (visbare.length > 0) o.ut(`  Fjern dem med: bun scripts/publiser-felles-wiki.ts --fjern -- ${visbare.join(" ")}`);
+    if (visbare.length > 0) o.ut(`  Fjern dem med: ${kommando(["--fjern", "--", ...visbare])}`);
     if (visbare.length < r.foreldreløseObjekter.length) o.ut("  (en sti med funn er skjult og står ikke i --fjern-linjen)");
   }
+  if (status.muligensForeldreløse.length > 0) {
+    o.ut(
+      `\nDatafiler i bøtta som ingen lest side viser. ${r.ulesteSider} fulgt(e) side(r) kunne ikke leses ` +
+        "(avvist før lesing eller mangler lokalt) og kan vise dem, så de kan være i bruk — derfor ingen --fjern-linje:",
+    );
+    for (const f of status.muligensForeldreløse) o.ut(`MULIG FORELDRELØS ${f}`);
+  }
   const antall = (t: Tilstand) => status.sider.filter((s) => s.tilstand === t).length;
+  const mulige = status.muligensForeldreløse.length > 0 ? `, ${status.muligensForeldreløse.length} mulig foreldreløs(e)` : "";
   o.ut(
     `\nOppsummering: ${antall("uendret")} uendret, ${antall("endret")} endret, ${antall("avvist")} avvist, ` +
-      `${antall("mangler-lokalt")} mangler lokalt, ${status.foreldreløse.length} foreldreløs(e) datafil(er).`,
+      `${antall("mangler-lokalt")} mangler lokalt, ${status.foreldreløse.length} foreldreløs(e) datafil(er)${mulige}.`,
   );
-  if (antall("endret") > 0) o.ut(`Synk de endrede med: bun scripts/publiser-felles-wiki.ts --synk ${rotArg}`);
+  if (hint && antall("endret") > 0) {
+    const flagg = [...(hint.tillatIdent ? ["--tillat-ident"] : []), ...(hint.bucket !== undefined ? ["--bucket", hint.bucket] : [])];
+    o.ut(`Synk de endrede med: ${kommando(["--synk", ...flagg, "--", rotArg])}`);
+  }
 }
 
 function synk(valg: Valg, bucket: string, rot: string, rotArg: string, o: Omgivelser): number {
@@ -1549,16 +1668,20 @@ function synk(valg: Valg, bucket: string, rot: string, rotArg: string, o: Omgive
     o.feil(`Feil: ${r} — ingenting er lastet opp`);
     return EXIT_BRUK;
   }
-  skrivStatus(r, rotArg, o);
-  const avvistIStatus = r.status.sider.some((s) => s.tilstand === "avvist");
+  skrivStatus(r, rotArg, null, o);
+  const antall = (t: Tilstand) => r.status.sider.filter((s) => s.tilstand === t).length;
+  const info: SynkInfo = { md5: r.md5, avvistIStatus: antall("avvist"), manglerLokalt: antall("mangler-lokalt") };
   if (r.endredeObjekter.length === 0) {
     o.ut("\nIngenting å synke: ingen fulgt side er endret.");
-    return avvistIStatus ? EXIT_AVVIST : EXIT_OK;
+    o.ut(
+      valg.dryRun
+        ? `\nOppsummering: 0 klar(e), ${info.avvistIStatus} avvist, ${info.manglerLokalt} mangler lokalt.`
+        : `\nOppsummering: 0 lastet opp, ${info.avvistIStatus} avvist, 0 feilet, ${info.manglerLokalt} mangler lokalt.`,
+    );
+    return info.avvistIStatus > 0 ? EXIT_AVVIST : EXIT_OK;
   }
   o.ut(`\nSynker ${r.endredeObjekter.length} endret(e) side(r):\n`);
-  const kode = publiser(valg, bucket, rot, rot, r.endredeObjekter, o);
-  if (kode === EXIT_OK && avvistIStatus) return EXIT_AVVIST;
-  return kode;
+  return publiser(valg, bucket, rot, rot, r.endredeObjekter, o, info);
 }
 
 export function kjør(argv: string[], o: Omgivelser): number {
@@ -1590,7 +1713,7 @@ export function kjør(argv: string[], o: Omgivelser): number {
       return EXIT_BRUK;
     }
     if (valg.json) o.ut(JSON.stringify(r.status, null, 2));
-    else skrivStatus(r, rotArg!, o);
+    else skrivStatus(r, rotArg!, valg, o);
     return EXIT_OK;
   }
   if (valg.synk) return synk(valg, bucket, rot, rotArg!, o);

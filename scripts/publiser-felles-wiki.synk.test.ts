@@ -248,7 +248,7 @@ describe("--status", () => {
     bøtte({ "b.md": "# B\n", "a/Z990123.md": "# gammel\n", "data/Z990124.csv": CSV });
     const { kode, data, stdout } = json(["--tillat-ident"]);
     expect(kode).toBe(0);
-    expect(Object.keys(data)).toEqual(["bøtte", "sider", "foreldreløse"]);
+    expect(Object.keys(data)).toEqual(["bøtte", "sider", "foreldreløse", "muligensForeldreløse"]);
     expect(data.bøtte).toBe("felles-test");
     expect(data.sider.map((s) => s.relPath)).toEqual(["[skjult sti: inneholder NAVident]", "b.md"]);
     expect(data.sider[0]).toMatchObject({ tilstand: "endret", endredeFiler: ["[skjult sti: inneholder NAVident]"] });
@@ -351,5 +351,167 @@ describe("flagg", () => {
     expect(r.kode).toBe(2);
     expect(r.ut).toContain(melding);
     expect(kall()).toEqual([]);
+  });
+});
+
+// Fiksrunde 1: hver test her var rød mot 1c4815b.
+describe("fiksrunde 1", () => {
+  type Full = { bøtte: string; sider: SideJson[]; foreldreløse: string[]; muligensForeldreløse?: string[] };
+  const full = (args: string[] = []): Full => JSON.parse(kjør(["--status", "--json", ...args, rot]).stdout);
+  const sisteLinje = (s: string) => s.trim().split("\n").at(-1);
+  /** Kjører den utskrevne kommandolinjen i bash med printf i stedet for skriptet, og gir argumentene. */
+  const argumenterFra = (linje: string): string[] => {
+    const kommando = linje.replace(/^.*?bun scripts\/publiser-felles-wiki\.ts/, "printf '%s\\n'");
+    const r = Bun.spawnSync(["bash", "-c", kommando]);
+    return r.stdout.toString().split("\n").slice(0, -1);
+  };
+
+  test("1: en side som ikke kunne leses, gjør datafilene ingen lest side viser, usikre: ingen --fjern-linje", () => {
+    skriv("b.md", "# B\n");
+    bøtte({ "b.md": "# B\n", "borte.mdx": SIDE, "rapport/Q-1.csv": CSV });
+    const d = full();
+    expect(d.foreldreløse).toEqual([]);
+    expect(d.muligensForeldreløse).toEqual(["rapport/Q-1.csv"]);
+    const r = kjør(["--status", rot]);
+    expect(r.ut).not.toContain("--fjern --");
+    expect(r.ut).toContain("kunne ikke leses");
+  });
+
+  test("1: en side som avvises før den leses (for stor), gjør også datafilene usikre", () => {
+    skriv("stor.mdx", SIDE + "x".repeat(2 * 1024 * 1024));
+    bøtte({ "stor.mdx": "# gammel\n", "rapport/Q-1.csv": CSV });
+    const d = full();
+    expect(d.foreldreløse).toEqual([]);
+    expect(d.muligensForeldreløse).toEqual(["rapport/Q-1.csv"]);
+  });
+
+  test("1: når alle fulgte sider ble lest, er foreldreløse sikre og har --fjern-linjen; muligensForeldreløse er tom", () => {
+    skriv("a.md", "# A\n");
+    bøtte({ "a.md": "# A\n", "borte.html": "<p>x</p>", "data/gammel.csv": CSV });
+    const d = full();
+    expect(d.foreldreløse).toEqual(["data/gammel.csv"]);
+    expect(d.muligensForeldreløse).toEqual([]);
+    expect(kjør(["--status", rot]).ut).toContain("--fjern -- data/gammel.csv");
+  });
+
+  test("2: --fjern-linjen siterer navn med mellomrom, `;`, `$(…)` og `'`, så hvert navn blir ett argument", () => {
+    skriv("a.md", "# A\n");
+    const navn = ["data/a b.csv", "data/x;$(echo PWNED).csv", "data/it's.csv", "data/vanlig.csv"];
+    bøtte({ "a.md": "# A\n", ...Object.fromEntries(navn.map((n) => [n, CSV])) });
+    const linje = kjør(["--status", rot]).ut.split("\n").find((l) => l.includes("Fjern dem med:"))!;
+    expect(argumenterFra(linje)).toEqual(["--fjern", "--", ...[...navn].sort()]);
+  });
+
+  test("2 og 4: synk-hintet siterer roten og tar med --tillat-ident og --bucket", () => {
+    const annen = path.join(tmp, "min wiki;$(echo PWNED)");
+    mkdirSync(annen);
+    writeFileSync(path.join(annen, "a.md"), "# A ny\nav Z990123\n");
+    bøtte({ "a.md": "# A\n" });
+    const r = kjør(["--status", "--tillat-ident", "--bucket", "felles-annen", annen]);
+    const linje = r.ut.split("\n").find((l) => l.includes("Synk de endrede med:"))!;
+    expect(argumenterFra(linje)).toEqual(["--synk", "--tillat-ident", "--bucket", "felles-annen", "--", annen]);
+  });
+
+  test("4: --synk skriver ikke synk-hintet", () => {
+    skriv("a.md", "# A ny\n");
+    bøtte({ "a.md": "# A\n" });
+    expect(kjør(["--synk", "--dry-run", rot]).ut).not.toContain("Synk de endrede med");
+  });
+
+  test("3: en datafil navngitt to ganger (d.csv og ./d.csv) står én gang i endredeFiler, avslag og advarsler", () => {
+    skriv("e.mdx", '<Query csv="d.csv" />\n<Query csv="./d.csv" />\n<Query csv="borte.csv" />\n<Query csv="./borte.csv" />\n');
+    skriv("d.csv", "a,b\n1,3\n");
+    bøtte({ "e.mdx": "# gammel\n", "d.csv": CSV });
+    const s = side(full(), "e.mdx")!;
+    expect(s.endredeFiler).toEqual(["e.mdx", "d.csv"]);
+    expect(s.advarsler.filter((a) => a.startsWith("borte.csv: filen finnes ikke"))).toHaveLength(1);
+    skriv("d.csv", `a,fnr\n1,${FNR}\n`);
+    const a = side(full(), "e.mdx")!;
+    expect(a.tilstand).toBe("avvist");
+    expect(new Set(a.avslag).size).toBe(a.avslag.length);
+  });
+
+  test("6: statusen maskerer en sti med funn uten løpenummer", () => {
+    skriv("a/Z990123.md", `# x\n${FNR}\n`);
+    bøtte({ "a/Z990123.md": "# gammel\n" });
+    const s = full(["--tillat-ident"]).sider[0]!;
+    expect(s.tilstand).toBe("avvist");
+    expect(s.avslag.join("\n")).toContain("[skjult sti: inneholder NAVident]:2:");
+    expect(JSON.stringify(s)).not.toContain("nr. ");
+  });
+
+  test("7: en lokal fil som bare skiller seg fra objektet i store/små bokstaver, regnes som mangler-lokalt", () => {
+    skriv("Plan.md", "# Plan ny\n");
+    bøtte({ "plan.md": "# Plan\n" });
+    expect(side(full(), "plan.md")!.tilstand).toBe("mangler-lokalt");
+    kjør(["--synk", rot]);
+    expect(destinasjoner()).toEqual([]);
+  });
+
+  test("8: en datafil slettet lokalt, men fortsatt i bøtta, gjør siden endret med en --fjern-linje", () => {
+    skriv("plans/r.mdx", SIDE);
+    bøtte({ "plans/r.mdx": SIDE, "plans/rapport/Q-1.csv": CSV });
+    const s = side(full(), "plans/r.mdx")!;
+    expect(s.tilstand).toBe("endret");
+    expect(s.endredeFiler).toEqual(["plans/rapport/Q-1.csv"]);
+    const advarsel = s.advarsler.find((a) => a.includes("ligger fortsatt i bøtta"))!;
+    expect(advarsel).toContain("--fjern -- plans/rapport/Q-1.csv");
+  });
+
+  test("9: md5_hash som ikke er en streng, regnes som manglende MD5 i statusen", () => {
+    skriv("a.md", "# A\n");
+    writeFileSync(path.join(falsk, "liste.json"), JSON.stringify([{ name: "a.md", md5_hash: 5 }, { name: "gml.md", md5_hash: 7, noncurrent_time: "2026-01-01" }]));
+    const r = kjør(["--status", "--json", rot]);
+    expect(r.kode).toBe(0);
+    const s = side(JSON.parse(r.stdout), "a.md")!;
+    expect(s.tilstand).toBe("endret");
+    expect(s.advarsler[0]).toContain("ingen MD5");
+  });
+
+  test("9: vanlig publisering lister bøtta som origin/main og godtar en liste med rar md5_hash", () => {
+    skriv("a.md", "# A\n");
+    writeFileSync(path.join(falsk, "liste.json"), JSON.stringify([{ name: "b.md", md5_hash: 5 }]));
+    const r = kjør([rot, "a.md"]);
+    expect(r.kode).toBe(0);
+    expect(kall()[0]!.args).toContain("--format=json(name,noncurrent_time)");
+    expect(destinasjoner()).toEqual(["gs://felles-test/a.md"]);
+  });
+
+  test("10: --synk --dry-run sier ikke at bøtta ikke er kontaktet", () => {
+    skriv("a.md", "# A ny\n");
+    bøtte({ "a.md": "# A\n" });
+    const r = kjør(["--synk", "--dry-run", rot]);
+    expect(r.ut).not.toContain("bøtta er ikke kontaktet");
+    expect(r.ut).toContain("kollisjoner med eksisterende objekter er sjekket");
+  });
+
+  test("11: synk-oppsummeringen teller sider avvist i statusen og sider som mangler lokalt", () => {
+    skriv("a.md", "# A ny\n");
+    skriv("b.md", "# B\nav Z990123\n");
+    bøtte({ "a.md": "# A\n", "b.md": "# B gammel\n", "borte.md": "# borte\n" });
+    const tørr = kjør(["--synk", "--dry-run", rot]);
+    expect(tørr.kode).toBe(1);
+    expect(sisteLinje(tørr.ut)).toBe("Oppsummering: 1 klar(e), 1 avvist, 1 mangler lokalt.");
+    const ekte = kjør(["--synk", rot]);
+    expect(ekte.kode).toBe(1);
+    expect(sisteLinje(ekte.stdout)).toBe("Oppsummering: 1 lastet opp, 1 avvist, 0 feilet, 1 mangler lokalt.");
+  });
+
+  test("11: ingenting å synke, men en avvist side: siste linje sier avvist, exit 1", () => {
+    skriv("b.md", "# B\nav Z990123\n");
+    bøtte({ "b.md": "# B gammel\n" });
+    const r = kjør(["--synk", rot]);
+    expect(r.kode).toBe(1);
+    expect(sisteLinje(r.stdout)).toBe("Oppsummering: 0 lastet opp, 1 avvist, 0 feilet, 0 mangler lokalt.");
+  });
+
+  test("12: en endret side med uendrede datafiler laster bare opp siden", () => {
+    skriv("plans/r.mdx", SIDE + "ny\n");
+    skriv("plans/rapport/Q-1.csv", CSV_MED_IDENT);
+    bøtte({ "plans/r.mdx": SIDE, "plans/rapport/Q-1.csv": CSV_STRIPPET });
+    const r = kjør(["--synk", rot]);
+    expect(r.kode).toBe(0);
+    expect(destinasjoner()).toEqual(["gs://felles-test/plans/r.mdx"]);
+    expect(kjør(["--synk", "--dry-run", rot]).ut).not.toContain("vil laste opp gs://felles-test/plans/rapport/Q-1.csv");
   });
 });
