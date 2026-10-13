@@ -244,8 +244,9 @@ describe("--status", () => {
 
   test("JSON: ett objekt med bøtte, sortert sideliste og maskert sti med funn", () => {
     skriv("b.md", "# B\n");
-    skriv("a/Z990123.md", "# Ident i navnet\n");
-    bøtte({ "b.md": "# B\n", "a/Z990123.md": "# gammel\n", "data/Z990124.csv": CSV });
+    // .html: en endret .md- eller .mdx-side ville gjort datafilen bare mulig foreldreløs.
+    skriv("a/Z990123.html", "<p>Ident i navnet</p>\n");
+    bøtte({ "b.md": "# B\n", "a/Z990123.html": "<p>gammel</p>\n", "data/Z990124.csv": CSV });
     const { kode, data, stdout } = json(["--tillat-ident"]);
     expect(kode).toBe(0);
     expect(Object.keys(data)).toEqual(["bøtte", "sider", "foreldreløse", "muligensForeldreløse"]);
@@ -374,7 +375,7 @@ describe("fiksrunde 1", () => {
     expect(d.muligensForeldreløse).toEqual(["rapport/Q-1.csv"]);
     const r = kjør(["--status", rot]);
     expect(r.ut).not.toContain("--fjern --");
-    expect(r.ut).toContain("kunne ikke leses");
+    expect(r.ut).toContain("ikke uendret");
   });
 
   test("1: en side som avvises før den leses (for stor), gjør også datafilene usikre", () => {
@@ -513,5 +514,118 @@ describe("fiksrunde 1", () => {
     expect(r.kode).toBe(0);
     expect(destinasjoner()).toEqual(["gs://felles-test/plans/r.mdx"]);
     expect(kjør(["--synk", "--dry-run", rot]).ut).not.toContain("vil laste opp gs://felles-test/plans/rapport/Q-1.csv");
+  });
+});
+
+// Fiksrunde 2: testene for punkt 1–3 var røde mot 055e729; testene for M12,
+// M15, M25 og M26 låser kode som var riktig, og er røde mot mutanten.
+describe("fiksrunde 2", () => {
+  type Full = { bøtte: string; sider: SideJson[]; foreldreløse: string[]; muligensForeldreløse: string[] };
+  const full = (args: string[] = []): Full => JSON.parse(kjør(["--status", "--json", ...args, rot]).stdout);
+  const argumenterFra = (linje: string): string[] => {
+    const kommando = linje.replace(/^.*?bun scripts\/publiser-felles-wiki\.ts/, "printf '%s\\n'");
+    const r = Bun.spawnSync(["bash", "-c", kommando]);
+    return r.stdout.toString().split("\n").slice(0, -1);
+  };
+  const IKKE_TILGJENGELIG = "«File not available»";
+  const GAMMEL_A = '# A\n<Query csv="d.csv" />\n';
+
+  test("1: en avvist side kan vise en datafil i bøtteversjonen sin: ingen sikker foreldreløs, ingen --fjern-linje", () => {
+    skriv("a.mdx", `# A\n${FNR}\n`);
+    bøtte({ "a.mdx": GAMMEL_A, "d.csv": CSV });
+    const d = full();
+    expect(side(d, "a.mdx")!.tilstand).toBe("avvist");
+    expect(d.foreldreløse).toEqual([]);
+    expect(d.muligensForeldreløse).toEqual(["d.csv"]);
+    const r = kjør(["--status", rot]);
+    expect(r.ut).not.toContain("FORELDRELØS     d.csv");
+    expect(r.ut).not.toContain("--fjern --");
+    expect(r.ut).toContain("ikke uendret");
+  });
+
+  test("1: en endret side kan vise en datafil i bøtteversjonen sin: ingen sikker foreldreløs", () => {
+    skriv("a.mdx", "# A uten datafil\n");
+    bøtte({ "a.mdx": GAMMEL_A, "d.csv": CSV });
+    const d = full();
+    expect(side(d, "a.mdx")!.tilstand).toBe("endret");
+    expect(d.foreldreløse).toEqual([]);
+    expect(d.muligensForeldreløse).toEqual(["d.csv"]);
+  });
+
+  test("1: en endret .html-side kan ikke vise datafiler: foreldreløs er fortsatt sikker", () => {
+    skriv("a.mdx", "# A\n");
+    skriv("b.html", "<p>ny</p>");
+    bøtte({ "a.mdx": "# A\n", "b.html": "<p>gammel</p>", "d.csv": CSV });
+    const d = full();
+    expect(d.foreldreløse).toEqual(["d.csv"]);
+    expect(d.muligensForeldreløse).toEqual([]);
+  });
+
+  test("2: en NFD-referanse til en datafil slettet lokalt gir --fjern-linjen med objektnavnet i NFC", () => {
+    const nfd = "rapport/blå.csv".normalize("NFD");
+    const s = `# R\n<Query csv="${nfd}" />\n`;
+    skriv("r.mdx", s);
+    bøtte({ "r.mdx": s, "rapport/blå.csv": CSV });
+    const a = side(full(), "r.mdx")!.advarsler.find((x) => x.includes("ligger fortsatt i bøtta"))!;
+    expect(a).not.toContain("stien er skjult her");
+    expect(argumenterFra(a)).toEqual(["--fjern", "--", "rapport/blå.csv".normalize("NFC")]);
+  });
+
+  test("3: en side som bare er endret fordi en datafil er slettet lokalt, lastes ikke opp; synk gir --fjern-linjen", () => {
+    skriv("plans/r.mdx", SIDE);
+    bøtte({ "plans/r.mdx": SIDE, "plans/rapport/Q-1.csv": CSV });
+    const r = kjør(["--synk", rot]);
+    expect(r.kode).toBe(0);
+    expect(destinasjoner()).toEqual([]);
+    expect(r.ut).not.toContain(IKKE_TILGJENGELIG);
+    const linje = r.ut.split("\n").find((l) => l.includes("--fjern") && !l.includes("advarsel:"))!;
+    expect(argumenterFra(linje)).toEqual(["--fjern", "--", "plans/rapport/Q-1.csv"]);
+    expect(r.ut).toContain("Ingenting å synke: ingen endret side har noe å laste opp.");
+    expect(kjør(["--synk", "--dry-run", rot]).ut).not.toContain("vil laste opp");
+    // Bøtta er fortsatt ulik til datafilen er fjernet, men statusen foreslår ikke en synk som ikke gjør noe.
+    expect(side(full(), "plans/r.mdx")!.tilstand).toBe("endret");
+    expect(kjør(["--status", rot]).ut).not.toContain("Synk de endrede med");
+  });
+
+  test("3: synk av en endret side sier ikke «File not available» om en datafil som ligger i bøtta", () => {
+    skriv("plans/r.mdx", SIDE + "ny\n");
+    bøtte({ "plans/r.mdx": SIDE, "plans/rapport/Q-1.csv": CSV });
+    const r = kjør(["--synk", rot]);
+    expect(r.kode).toBe(0);
+    expect(destinasjoner()).toEqual(["gs://felles-test/plans/r.mdx"]);
+    expect(r.ut).not.toContain(IKKE_TILGJENGELIG);
+  });
+
+  test("M12: en lokal side med NFD-navn finnes for objektet i NFC", () => {
+    const navn = "blå.md";
+    writeFileSync(path.join(rot, navn.normalize("NFD")), "# B\n");
+    bøtte({ [navn.normalize("NFC")]: "# B\n" });
+    expect(side(full(), navn.normalize("NFC"))!.tilstand).toBe("uendret");
+  });
+
+  test("M15: statusen sier ikke «File not available» om en datafil slettet lokalt som ligger i bøtta", () => {
+    skriv("plans/r.mdx", SIDE);
+    bøtte({ "plans/r.mdx": SIDE, "plans/rapport/Q-1.csv": CSV });
+    const s = side(full(), "plans/r.mdx")!;
+    expect(s.advarsler.some((a) => a.includes("ligger fortsatt i bøtta"))).toBe(true);
+    expect(s.advarsler.filter((a) => a.includes(IKKE_TILGJENGELIG))).toEqual([]);
+  });
+
+  test("M25: synk skriver en maskert sti uten løpenummer", () => {
+    skriv("a/Z990123.md", "# ny\n");
+    bøtte({ "a/Z990123.md": "# gammel\n" });
+    const r = kjør(["--synk", "--tillat-ident", rot]);
+    expect(r.kode).toBe(0);
+    expect(r.ut).toContain("[skjult sti: inneholder NAVident]");
+    expect(r.ut).not.toMatch(/nr\. \d/);
+  });
+
+  test("M26: --fjern-linjen for en datafil slettet lokalt siterer navnet, så det blir ett argument", () => {
+    const navn = "data/it's $(x).csv";
+    const s = `# R\n<Query csv="${navn}" />\n`;
+    skriv("r.mdx", s);
+    bøtte({ "r.mdx": s, [navn]: CSV });
+    const a = side(full(), "r.mdx")!.advarsler.find((x) => x.includes("ligger fortsatt i bøtta"))!;
+    expect(argumenterFra(a)).toEqual(["--fjern", "--", navn]);
   });
 });
