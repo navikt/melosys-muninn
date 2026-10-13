@@ -5,7 +5,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fjernIdentKolonner, navngitteDatafiler, vurderFil } from "./publiser-felles-wiki.ts";
+import { fjernIdentKolonner, klassifiser11, navngitteDatafiler, vurderFil } from "./publiser-felles-wiki.ts";
 import fasit from "./publiser-felles-wiki.datafiler.cases.json";
 
 // Syntetisk fødselsnummer, bygget fra kontrollsifferalgoritmen.
@@ -247,34 +247,39 @@ describe("vurderFil for en datafil", () => {
     expect(v.fjernet).toEqual([{ navn: "b", rader: 1 }]);
   }, 10_000);
 
-  test("CSV: et fødselsnummer som bare oppstår i kopien når kolonnen mellom er borte, avvises ved ny skanning", () => {
+  // Endret 2026-10-13: kopien skannes celle for celle, og sifrene står i to celler, så ingenting flagges.
+  test("CSV: sifre som havner i nabokolonner når kolonnen mellom er borte, flagges ikke i kopien", () => {
     const abs = skriv("r/sammen.csv", `a,b,c\n${FNR.slice(0, 6)},Z990123,${FNR.slice(6)}\n`);
     const v = vurderFil(abs, "r/sammen.csv", false, undefined, true);
     expect(v.fjernet).toEqual([{ navn: "b", rader: 1 }]);
-    expect(v.avslag.join("\n")).toContain("fødselsnummer");
+    expect(v.avslag).toEqual([]);
   });
 
   test("CSV: en e-postadresse avvises, kolonnen fjernes ikke", () => {
     const abs = skriv("r/epost.csv", "a,b\n1,ola@example.no\n");
-    const v = vurderFil(abs, "r/epost.csv", true, undefined, true);
+    const v = vurderFil(abs, "r/epost.csv", false, undefined, true);
     expect(v.fjernet).toEqual([]);
     expect(v.avslag).toHaveLength(1);
     expect(v.avslag[0]).toContain("e-post");
   });
 
-  test("YAML: en NAVident avvises, også med --tillat-ident, og uten å foreslå flagget", () => {
+  // Endret 2026-10-13: --tillat-ident gjelder også datafiler.
+  test("YAML: en NAVident avvises uten --tillat-ident og er en advarsel med", () => {
     const abs = skriv("r/cases.yaml", "- id: MELOSYS-1\n  eier: Z990123\n");
-    const v = vurderFil(abs, "r/cases.yaml", true, undefined, true);
-    expect(v.fjernet).toEqual([]);
-    expect(v.avslag).toEqual(["r/cases.yaml:2: NAVident *****23"]);
-    expect(v.advarsler).toEqual([]);
+    const uten = vurderFil(abs, "r/cases.yaml", false, undefined, true);
+    expect(uten.fjernet).toEqual([]);
+    expect(uten.avslag).toEqual(["r/cases.yaml:2: NAVident *****23 (bruk --tillat-ident hvis dette er med vilje)"]);
+    const med = vurderFil(abs, "r/cases.yaml", true, undefined, true);
+    expect(med.avslag).toEqual([]);
+    expect(med.advarsler).toEqual(["r/cases.yaml:2: NAVident *****23 (tillatt med --tillat-ident)"]);
   });
 
-  test("en NAVident i filnavnet avvises også med --tillat-ident", () => {
+  test("en NAVident i filnavnet avvises uten --tillat-ident og er en advarsel med", () => {
     const abs = skriv("r/Z990123.csv", "a\n1\n");
-    const v = vurderFil(abs, "r/Z990123.csv", true, undefined, true);
-    expect(v.avslag.join("\n")).toContain("filnavnet har NAVident");
-    expect(v.advarsler).toEqual([]);
+    expect(vurderFil(abs, "r/Z990123.csv", false, undefined, true).avslag.join("\n")).toContain("filnavnet har NAVident");
+    const med = vurderFil(abs, "r/Z990123.csv", true, undefined, true);
+    expect(med.avslag).toEqual([]);
+    expect(med.advarsler).toEqual(["filnavnet har NAVident *****23 (tillatt med --tillat-ident)"]);
   });
 
   test("SQL: en NAVident avvises", () => {
@@ -286,5 +291,88 @@ describe("vurderFil for en datafil", () => {
     const stor = "a".repeat(1024 * 1024 + 1);
     expect(vurderFil(skriv("r/stor.csv", stor), "r/stor.csv", false, undefined, true).avslag.join("\n")).toMatch(/større enn 1048576 byte/);
     expect(vurderFil(skriv("r/stor.md", stor), "r/stor.md", false).avslag).toEqual([]);
+  });
+});
+
+describe("en CSV-datafil skannes for fødselsnummer celle for celle", () => {
+  const rot = mkdtempSync(path.join(tmpdir(), "felles-csv-celler-"));
+  afterAll(() => rmSync(rot, { recursive: true, force: true }));
+  const vurder = (rel: string, innhold: string, tillatIdent = false) => {
+    mkdirSync(path.dirname(path.join(rot, rel)), { recursive: true });
+    writeFileSync(path.join(rot, rel), innhold);
+    return vurderFil(path.join(rot, rel), rel, tillatIdent, undefined, true);
+  };
+  const DATO = FNR.slice(0, 6);
+  const PERS = FNR.slice(6);
+  // Formen fra kode-wikiens Q-G.csv: identens sifre + ANTALL + DAGER + første siffer i SNITT gir 11 sifre.
+  const IDENT = "Z010126";
+  const QG = `ENDRET_AV,ANTALL,DAGER,SNITT_PER_DAG,FOERSTE,SISTE\n${IDENT},30,25,1.2,2023-02-09,2023-11-27\n`;
+
+  test("forutsetning: sifrene på tvers av cellene i Q-G-raden består dato- og mod11-sjekken", () => {
+    expect(klassifiser11(IDENT.slice(1) + "30251")).toBe("fødselsnummer");
+  });
+
+  test("(a) Q-G-raden avvises ikke som fødselsnummer; identkolonnen fjernes som før", () => {
+    const v = vurder("r/Q-G.csv", QG);
+    expect(v.avslag).toEqual([]);
+    expect(v.fjernet).toEqual([{ navn: "ENDRET_AV", rader: 1 }]);
+  });
+
+  test("(b) et fødselsnummer i én celle avvises fortsatt, også delt opp inne i cellen", () => {
+    for (const celle of [FNR, `${DATO} ${PERS}`, `${DATO.slice(0, 2)}.${DATO.slice(2, 4)}.${DATO.slice(4)}-${PERS}`, `"nr, ${DATO} ${PERS}"`]) {
+      const v = vurder("r/en-celle.csv", `id,notat,n\n1,${celle},2\n`);
+      expect(v.avslag).toEqual([`r/en-celle.csv:2: fødselsnummer *********${FNR.slice(-2)}`]);
+    }
+  });
+
+  test("(b) linjenummeret stemmer når et felt i anførselstegn går over flere linjer", () => {
+    const v = vurder("r/flerlinje.csv", `id,notat\n1,"første linje\nandre ${FNR}"\n2,x\n`);
+    expect(v.avslag).toEqual([`r/flerlinje.csv:3: fødselsnummer *********${FNR.slice(-2)}`]);
+  });
+
+  test("(c) et nummer delt over to celler flagges ikke: et ekte fødselsnummer står aldri i to celler", () => {
+    const v = vurder("r/to-celler.csv", `a,b\n${DATO},${PERS}\n`);
+    expect(v.avslag).toEqual([]);
+  });
+
+  test("(c) heller ikke over to poster på samme linje (alene CR)", () => {
+    expect(vurder("r/cr.csv", `a\r${DATO}\r${PERS}\n`).avslag).toEqual([]);
+  });
+
+  test("(c) heller ikke over to poster med én HTML-celle hver", () => {
+    expect(vurder("r/td.csv", `a\n<td>${DATO}</td>\n<td>${PERS}</td>\n`).avslag).toEqual([]);
+  });
+
+  test("(b) HTML-celler på hver sin linje inne i samme felt i anførselstegn avvises fortsatt", () => {
+    const v = vurder("r/td-felt.csv", `a,b\n1,"x\n<td>${DATO}</td>\n<td>${PERS}</td>\ny"\n`);
+    expect(v.avslag).toEqual([`r/td-felt.csv:3: fødselsnummer *********${FNR.slice(-2)}`]);
+  });
+
+  test("(d) med --tillat-ident beholdes NAVident-kolonnen, og byteene som lastes opp, er kildefilens", () => {
+    const kilde = "behandling,endret_av\n101,Z990123\n";
+    const v = vurder("r/ident.csv", kilde, true);
+    expect(v.avslag).toEqual([]);
+    expect(v.fjernet).toEqual([]);
+    expect(Buffer.from(v.bytes!).toString("utf8")).toBe(kilde);
+    expect(v.advarsler).toEqual(["r/ident.csv:2: NAVident *****23 (tillatt med --tillat-ident)"]);
+  });
+
+  test("(d) med --tillat-ident er en e-post i en datafil en advarsel; et fødselsnummer avvises fortsatt", () => {
+    expect(vurder("r/epost-t.csv", "a,b\n1,ola@example.no\n", true).avslag).toEqual([]);
+    const v = vurder("r/fnr-t.csv", `a,b\n1,${FNR}\n2,Z990123\n`, true);
+    expect(v.avslag).toEqual([`r/fnr-t.csv:2: fødselsnummer *********${FNR.slice(-2)}`]);
+  });
+
+  test("(e) uten --tillat-ident fjernes NAVident-kolonnen som før", () => {
+    const v = vurder("r/ident-u.csv", "behandling,endret_av\n101,Z990123\n");
+    expect(v.avslag).toEqual([]);
+    expect(v.fjernet).toEqual([{ navn: "endret_av", rader: 1 }]);
+    expect(Buffer.from(v.bytes!).toString("utf8")).toBe("behandling\n101\n");
+  });
+
+  test("en side skannes som før: sifre i to kommadelte felt på samme linje flagges", () => {
+    mkdirSync(rot, { recursive: true });
+    writeFileSync(path.join(rot, "side.md"), `${DATO},${PERS}\n`);
+    expect(vurderFil(path.join(rot, "side.md"), "side.md", false).avslag).toEqual([`side.md:1: fødselsnummer *********${FNR.slice(-2)}`]);
   });
 });

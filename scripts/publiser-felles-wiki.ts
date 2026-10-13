@@ -17,8 +17,9 @@
  * én gang og tas ut med `--fjern`.
  *
  * `--status` endrer ingenting. Den lister bøtta med MD5, vurderer hver fulgte
- * side med samme sjekk som publiseringen (også datafilene siden viser, med
- * NAVident-kolonnene fjernet fra CSV-kopien) og sammenligner MD5 av byteene
+ * side med samme sjekk som publiseringen (også datafilene siden viser, uten
+ * `--tillat-ident` med NAVident-kolonnene fjernet fra CSV-kopien) og
+ * sammenligner MD5 av byteene
  * som ville blitt lastet opp, med bøtta. Hver side får én tilstand:
  *   - `uendret`: siden og hver datafil den viser, er lik bøtta.
  *   - `endret`: siden eller en datafil den viser, er ulik bøtta eller ikke
@@ -88,18 +89,24 @@
  *     finner minst det muninns leser leser, og noen ganger mer. En .csv, .sql
  *     eller .yaml som oppgis alene, uten en side som viser den, avvises, og en
  *     datafil lastes bare opp når minst én side som viser den, er godkjent og
- *     lastet opp i samme kjøring. Datafiler skannes som sider, men uten
- *     `--tillat-ident`: er alle funnene i en CSV NAVident, fjernes hver kolonne
- *     med et funn fra kopien som lastes opp, og kopien skannes på nytt.
- *     Kildefilen endres ikke. Bare kommadelt, rektangulær CSV renses; filen
+ *     lastet opp i samme kjøring. Datafiler skannes som sider, med ett unntak:
+ *     i en CSV slås sifre sammen bare innenfor én celle, aldri over et komma
+ *     mellom feltene, fordi et fødselsnummer aldri står i to celler (et felt i
+ *     anførselstegn er én celle, også over flere linjer; en fil som ikke kan
+ *     leses som CSV, skannes som en side). Med `--tillat-ident`
+ *     er NAVident og e-post i en datafil advarsler, som i en side, og ingen
+ *     kolonne fjernes. Uten flagget: er alle funnene i en CSV NAVident, fjernes
+ *     hver kolonne med et funn fra kopien som lastes opp, og kopien skannes på
+ *     nytt. Kildefilen endres ikke. Bare kommadelt, rektangulær CSV renses; filen
  *     avvises når et anførselstegn aldri lukkes eller følges av tekst før neste
  *     komma eller linjeskift, når en overskriftscelle uten anførselstegn har
  *     semikolon eller tabulator, når overskriften (første rad som ikke er en
  *     tom linje) har færre enn to kolonner, når en rad som ikke er tom har et
  *     annet antall kolonner enn overskriften, når det blir ingen kolonner igjen, og
- *     når kopien blir større enn 1 MB. En NAVident i en .sql eller .yaml avvises,
- *     og et fødselsnummer, D-nummer, H-nummer, en e-postadresse eller et
- *     organisasjonsnummer avvises i alle datafiler, før noen kolonne fjernes.
+ *     når kopien blir større enn 1 MB. Uten `--tillat-ident` avvises en NAVident
+ *     i en .sql eller .yaml og en e-postadresse i alle datafiler. Et
+ *     fødselsnummer, D-nummer, H-nummer eller organisasjonsnummer avvises i
+ *     alle datafiler, før noen kolonne fjernes, også med flagget.
  *   - størrelse: over 2 MB for en side, 1 MB for en datafil, hopper speilet
  *     over objektet, så det avvises her.
  *   - koding: UTF-16 og UTF-32 (merke eller NUL-byte) avvises.
@@ -107,8 +114,9 @@
  *     dato), organisasjonsnummer (kontrollsiffer i datalignende kontekst),
  *     e-postadresser og NAVident. Teksten normaliseres først (NFKC, HTML-
  *     entiteter, usynlige tegn), så også sifre skilt av tabellceller eller
- *     formatering fanges. Bare e-post og NAVident kan slippes med
- *     `--tillat-ident`; et fødselsnummer har ingen overstyring.
+ *     formatering fanges (i en CSV-datafil bare innenfor én celle). Bare
+ *     e-post og NAVident kan slippes med `--tillat-ident`; et fødselsnummer
+ *     har ingen overstyring.
  *   - culled: `signal: none` i frontmatter eller
  *     `<meta name="wiki-signal" content="none">`.
  * Verdier skrives maskert til de to siste tegnene. En sti med funn, også en
@@ -386,8 +394,19 @@ function gjerde(linje: string): { tegn: string; lengde: number; resten: string }
   return { tegn: m[1]![0]!, lengde: m[1]!.length, resten: m[2]! };
 }
 
-/** Skanner tekst linje for linje. Samme type + verdi rapporteres én gang, med antall. */
-export function skannTekst(tekst: string): Funn[] {
+/** Delen av en linje som hører til én CSV-celle, og cellens løpenummer i filen. */
+export interface Cellebit {
+  tekst: string;
+  celle: number;
+}
+
+/**
+ * Skanner tekst linje for linje. Samme type + verdi rapporteres én gang, med antall.
+ * `celler` (fra `cellerPerLinje`, for en CSV): kandidater til fødselsnummer
+ * finnes i hver celle for seg, aldri på tvers av et skilletegn. De andre
+ * funnene leses fra hele linjen som før.
+ */
+export function skannTekst(tekst: string, celler?: Cellebit[][]): Funn[] {
   const funn = new Map<string, Funn>();
   const legg = (linje: number, type: FunnType, verdi: string, ident: boolean) => {
     const nøkkel = `${type}\u0000${verdi}`;
@@ -400,16 +419,17 @@ export function skannTekst(tekst: string): Funn[] {
   // HTML med én celle per linje (`<td>150385</td>` / `<td>12345</td>`): en
   // rekke slike linjer projiseres også samlet. Bare kandidater ingen enkelt
   // linje i rekken ga, telles der, så antallet ikke dobles.
-  let celler: { start: number; tekst: string[]; enkelt: Set<string> } | null = null;
-  const tømCeller = () => {
-    if (celler && celler.tekst.length > 1) {
-      for (const tall of new Set(sifferkandidater(celler.tekst.join(" ")))) {
-        if (celler.enkelt.has(tall)) continue;
+  // I en CSV slås bare linjer i samme celle sammen (`celle`).
+  let rekke: { start: number; tekst: string[]; enkelt: Set<string>; celle: number | undefined } | null = null;
+  const tømRekke = () => {
+    if (rekke && rekke.tekst.length > 1) {
+      for (const tall of new Set(sifferkandidater(rekke.tekst.join(" ")))) {
+        if (rekke.enkelt.has(tall)) continue;
         const type = klassifiser11(tall);
-        if (type) legg(celler.start, type, tall, false);
+        if (type) legg(rekke.start, type, tall, false);
       }
     }
-    celler = null;
+    rekke = null;
   };
   for (let i = 0; i < linjer.length; i++) {
     const rå = linjer[i]!;
@@ -421,16 +441,20 @@ export function skannTekst(tekst: string): Funn[] {
     else if (g && åpen && g.tegn === åpen.tegn && g.lengde >= åpen.lengde && g.resten.trim() === "") åpen = null;
     const iKodeblokk = varÅpen && åpen !== null;
     const linje = normaliserLinje(rå);
-    const enkelt = new Set(sifferkandidater(linje));
+    const biter = celler?.[i]?.map((b) => ({ tekst: normaliserLinje(b.tekst), celle: b.celle }));
+    const enkelt = new Set(biter ? biter.flatMap((b) => sifferkandidater(b.tekst)) : sifferkandidater(linje));
     for (const tall of enkelt) {
       const type = klassifiser11(tall);
       if (type) legg(nr, type, tall, false);
     }
-    if (erCellelinje(linje)) {
-      celler ??= { start: nr, tekst: [], enkelt: new Set() };
-      celler.tekst.push(linje);
-      for (const t of enkelt) celler.enkelt.add(t);
-    } else tømCeller();
+    // En CSV-linje er en cellelinje bare når hele linjen er én celle.
+    const cellelinje = biter ? (biter.length === 1 ? biter[0]! : null) : { tekst: linje, celle: undefined };
+    if (cellelinje && erCellelinje(cellelinje.tekst)) {
+      if (rekke && rekke.celle !== cellelinje.celle) tømRekke();
+      rekke ??= { start: nr, tekst: [], enkelt: new Set(), celle: cellelinje.celle };
+      rekke.tekst.push(cellelinje.tekst);
+      for (const t of enkelt) rekke.enkelt.add(t);
+    } else tømRekke();
     if (erDatakontekst(linje, iKodeblokk)) {
       const ni = new Set<string>();
       for (const m of linje.matchAll(RE_9)) ni.add(m[1]! + m[2]! + m[3]!);
@@ -439,7 +463,7 @@ export function skannTekst(tekst: string): Funn[] {
     for (const e of finnEpost(linje)) legg(nr, "e-post", e, true);
     for (const m of linje.matchAll(RE_NAVIDENT)) legg(nr, "NAVident", m[0], true);
   }
-  tømCeller();
+  tømRekke();
   return [...funn.values()];
 }
 
@@ -694,6 +718,9 @@ export function navngitteDatafiler(sideRel: string, tekst: string): NavngittData
 interface Celle {
   tekst: string;
   sitert: boolean;
+  /** Cellens plass i kildeteksten, anførselstegn med og skilletegnet etter uten: `[fra, til)`. */
+  fra: number;
+  til: number;
 }
 
 interface Post {
@@ -716,15 +743,18 @@ function lesCsv(tekst: string): { poster: Post[] } | { feil: string } {
   let sitert = false;
   let iSitat = false;
   let i = 0;
+  let fra = 0;
   const nyCelle = () => {
-    post.push({ tekst: felt, sitert });
+    post.push({ tekst: felt, sitert, fra, til: i });
     felt = "";
     sitert = false;
+    fra = i + 1;
   };
   const nyPost = (slutt: string) => {
     nyCelle();
     poster.push({ celler: post, slutt });
     post = [];
+    fra = i + slutt.length;
   };
   while (i < tekst.length) {
     const c = tekst[i]!;
@@ -759,6 +789,49 @@ function lesCsv(tekst: string): { poster: Post[] } | { feil: string } {
   if (iSitat) return { feil: "et anførselstegn lukkes aldri" };
   if (felt !== "" || post.length > 0 || sitert) nyPost("");
   return { poster };
+}
+
+/**
+ * Hver linje i en CSV (delt som i `skannTekst`) som delene som hører til hver
+ * celle, med anførselstegnene. Et felt i anførselstegn kan gå over flere
+ * linjer og har samme løpenummer på hver. Null når filen ikke kan leses som CSV.
+ */
+export function cellerPerLinje(tekst: string): Cellebit[][] | null {
+  const lest = lesCsv(tekst);
+  if ("feil" in lest) return null;
+  const linjer: [number, number][] = [];
+  let start = 0;
+  for (const m of tekst.matchAll(/\r?\n/g)) {
+    linjer.push([start, m.index]);
+    start = m.index + m[0].length;
+  }
+  linjer.push([start, tekst.length]);
+  const ut: Cellebit[][] = linjer.map(() => []);
+  let l = 0;
+  let nr = 0;
+  for (const post of lest.poster) {
+    for (const c of post.celler) {
+      while (linjer[l]![1] < c.fra) l++;
+      for (let j = l; j < linjer.length; j++) {
+        const [fra, til] = linjer[j]!;
+        if (fra > c.til) break;
+        const a = Math.max(c.fra, fra);
+        const b = Math.min(c.til, til);
+        if (b > a) ut[j]!.push({ tekst: tekst.slice(a, b), celle: nr });
+      }
+      nr++;
+    }
+  }
+  return ut;
+}
+
+/**
+ * Skanner en CSV-datafil: et fødselsnummer står aldri i to celler, så sifre
+ * slås bare sammen innenfor en celle. En fil som ikke kan leses som CSV,
+ * skannes som en side.
+ */
+export function skannCsv(tekst: string): Funn[] {
+  return skannTekst(tekst, cellerPerLinje(tekst) ?? undefined);
 }
 
 /** En tom linje: én tom celle uten anførselstegn. Muninns leser hopper over den. */
@@ -888,13 +961,13 @@ function ikkeUtf8(b: Uint8Array): string | null {
 /**
  * Vurderer én fil på disk. `abs` må ligge under roten; symlenker avvises.
  * `datafil`: filen er navngitt av en side (se `navngitteDatafiler`). Da gjelder
- * datagrensen, `--tillat-ident` gjelder ikke, og en CSV får kolonnene med
- * NAVident fjernet fra kopien, som så skannes på nytt.
+ * datagrensen, en CSV skannes celle for celle (`skannCsv`), og uten
+ * `--tillat-ident` får en CSV kolonnene med NAVident fjernet fra kopien, som
+ * så skannes på nytt.
  */
 export function vurderFil(abs: string, rel: string, tillatIdent: boolean, nr?: number, datafil = false): Vurdering {
   const visning = visningsnavn(rel, nr);
   const v: Vurdering = { rel, objekt: rel.normalize("NFC"), visning, avslag: [], advarsler: [], fjernet: [] };
-  if (datafil) tillatIdent = false;
   const maks = datafil ? MAKS_DATA_BYTES : MAKS_BYTES;
   const sti = sjekkSti(rel, datafil);
   if (sti) {
@@ -951,10 +1024,13 @@ export function vurderFil(abs: string, rel: string, tillatIdent: boolean, nr?: n
     return v;
   }
   let tekst = new TextDecoder("utf-8").decode(bytes);
-  // Kolonner fjernes bare når alle funnene i kildefilen er NAVident. Ellers
-  // avvises filen på funnene i kildefilen, så et fødselsnummer i en kolonne
-  // som også har en NAVident, ikke forsvinner med kolonnen.
-  const kildefunn = datafil && datatype(rel) === "csv" ? skannTekst(tekst) : [];
+  const csv = datafil && datatype(rel) === "csv";
+  const skann = csv ? skannCsv : skannTekst;
+  // Uten --tillat-ident fjernes kolonner bare når alle funnene i kildefilen er
+  // NAVident. Ellers avvises filen på funnene i kildefilen, så et
+  // fødselsnummer i en kolonne som også har en NAVident, ikke forsvinner med
+  // kolonnen. Med --tillat-ident lastes kildefilen opp som den er.
+  const kildefunn = csv && !tillatIdent ? skann(tekst) : [];
   if (kildefunn.length > 0 && kildefunn.every((f) => f.type === "NAVident")) {
     const kopi = fjernIdentKolonner(tekst);
     if (typeof kopi === "string") {
@@ -971,11 +1047,11 @@ export function vurderFil(abs: string, rel: string, tillatIdent: boolean, nr?: n
     }
   }
   if (!datafil && harSignalNone(tekst, path.posix.extname(rel).toLowerCase() === ".html")) v.avslag.push("siden er culled (`signal: none` eller wiki-signal=none)");
-  for (const f of skannTekst(tekst)) {
+  for (const f of skann(tekst)) {
     const antall = f.antall > 1 ? ` (${f.antall} forekomster)` : "";
     const linje = `${visning}:${f.linje}: ${f.type} ${f.maskert}${antall}`;
-    if (datafil) v.avslag.push(v.fjernet.length > 0 ? `${linje} (i kopien etter at kolonnene er fjernet)` : linje);
-    else if (f.ident && tillatIdent) v.advarsler.push(`${linje} (tillatt med --tillat-ident)`);
+    if (f.ident && tillatIdent) v.advarsler.push(`${linje} (tillatt med --tillat-ident)`);
+    else if (v.fjernet.length > 0) v.avslag.push(`${linje} (i kopien etter at kolonnene er fjernet)`);
     else v.avslag.push(f.ident ? `${linje} (bruk --tillat-ident hvis dette er med vilje)` : linje);
   }
   const bilder = !datafil && SIDE_ENDELSER.has(path.posix.extname(rel).toLowerCase()) ? refererteBilder(tekst).length : 0;
@@ -1298,7 +1374,7 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
       continue;
     }
     sett.add(rel);
-    const v = vurderFil(r.abs, rel, false, undefined, true);
+    const v = vurderFil(r.abs, rel, tillatIdent, undefined, true);
     sideneTil.set(v, sider);
     knytt(v, sider);
     vurderinger.push(v);
@@ -1599,6 +1675,7 @@ function lagStatus(bucket: string, rot: string, tillatIdent: boolean, o: Omgivel
     const iBøtta = [...new Set(k.manglerTil.get(side) ?? [])].filter((rel) => md5.has(rel.normalize("NFC")));
     s.advarsler.push(...new Set(utenFalskManglerAdvarsel(side.advarsler, iBøtta)));
     s.avslag.push(...side.avslag);
+    for (const d of datafiler) for (const a of d.advarsler) s.advarsler.push(a.startsWith(`${d.visning}:`) ? a : `${d.visning}: ${a}`);
     // Et skannerfunn starter allerede med filens visning (`sti:linje: …`); andre avslag får den foran.
     for (const d of datafiler) for (const a of d.avslag) if (a !== SIDE_AVVIST) s.avslag.push(a.startsWith(`${d.visning}:`) ? a : `${d.visning}: ${a}`);
     if (s.avslag.length > 0) {

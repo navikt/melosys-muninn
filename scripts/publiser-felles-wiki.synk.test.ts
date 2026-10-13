@@ -187,6 +187,17 @@ describe("--status", () => {
     expect(stdout).not.toContain("Z990123");
   });
 
+  test("med --tillat-ident sammenlignes kildefilen med NAVident-kolonnen, og identen er en advarsel", () => {
+    skriv("plans/r.mdx", SIDE);
+    skriv("plans/rapport/Q-1.csv", CSV_MED_IDENT);
+    bøtte({ "plans/r.mdx": SIDE, "plans/rapport/Q-1.csv": CSV_MED_IDENT });
+    const { data, stdout } = json(["--tillat-ident"]);
+    const s = side(data, "plans/r.mdx")!;
+    expect(s.tilstand).toBe("uendret");
+    expect(s.advarsler).toContain("plans/rapport/Q-1.csv:2: NAVident *****23 (tillatt med --tillat-ident)");
+    expect(stdout).not.toContain("Z990123");
+  });
+
   test("mangler-lokalt: siden er i bøtta, ikke under roten", () => {
     bøtte({ "plans/borte.md": "# Borte\n" });
     const r = kjør(["--status", rot]);
