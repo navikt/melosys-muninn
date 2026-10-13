@@ -401,7 +401,7 @@ describe("fiksrunde 1", () => {
   });
 
   test("2 og 4: synk-hintet siterer roten og tar med --tillat-ident og --bucket", () => {
-    const annen = path.join(tmp, "min wiki;$(echo PWNED)");
+    const annen = path.join(tmp, "min wiki's;$(echo PWNED)");
     mkdirSync(annen);
     writeFileSync(path.join(annen, "a.md"), "# A ny\nav Z990123\n");
     bøtte({ "a.md": "# A\n" });
