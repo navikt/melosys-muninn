@@ -90,10 +90,12 @@
  *     eller .yaml som oppgis alene, uten en side som viser den, avvises, og en
  *     datafil lastes bare opp når minst én side som viser den, er godkjent og
  *     lastet opp i samme kjøring. Datafiler skannes som sider, med ett unntak:
- *     i en CSV slås sifre sammen bare innenfor én celle, aldri over et komma
- *     mellom feltene, fordi et fødselsnummer aldri står i to celler (et felt i
- *     anførselstegn er én celle, også over flere linjer; en fil som ikke kan
- *     leses som CSV, skannes som en side). Med `--tillat-ident`
+ *     i en CSV slås sifre sammen innenfor én celle (et felt i anførselstegn er
+ *     én celle, også over flere linjer), og over et komma bare i to tilfeller
+ *     i samme post: en fødselsdato (6 sifre, `DD.MM.YY` eller `DD.MM.YYYY`)
+ *     fulgt av 5 sifre i neste celle som ikke er tom, og 2, 3, 3 og 3 sifre i
+ *     fire celler etter hverandre (tusenskilletegn uten anførselstegn). En fil som ikke kan leses som CSV, skannes
+ *     som en side. Med `--tillat-ident`
  *     er NAVident og e-post i en datafil advarsler, som i en side, og ingen
  *     kolonne fjernes. Uten flagget: er alle funnene i en CSV NAVident, fjernes
  *     hver kolonne med et funn fra kopien som lastes opp, og kopien skannes på
@@ -114,7 +116,7 @@
  *     dato), organisasjonsnummer (kontrollsiffer i datalignende kontekst),
  *     e-postadresser og NAVident. Teksten normaliseres først (NFKC, HTML-
  *     entiteter, usynlige tegn), så også sifre skilt av tabellceller eller
- *     formatering fanges (i en CSV-datafil bare innenfor én celle). Bare
+ *     formatering fanges (i en CSV-datafil etter regelen over). Bare
  *     e-post og NAVident kan slippes med `--tillat-ident`; et fødselsnummer
  *     har ingen overstyring.
  *   - culled: `signal: none` i frontmatter eller
@@ -400,13 +402,19 @@ export interface Cellebit {
   celle: number;
 }
 
+/** En CSV delt for skanneren: cellebitene per linje og 11-sifrede kandidater satt sammen av flere celler, per linje. */
+export interface CsvCeller {
+  biter: Cellebit[][];
+  sammensatt: string[][];
+}
+
 /**
  * Skanner tekst linje for linje. Samme type + verdi rapporteres én gang, med antall.
  * `celler` (fra `cellerPerLinje`, for en CSV): kandidater til fødselsnummer
  * finnes i hver celle for seg, aldri på tvers av et skilletegn. De andre
  * funnene leses fra hele linjen som før.
  */
-export function skannTekst(tekst: string, celler?: Cellebit[][]): Funn[] {
+export function skannTekst(tekst: string, csv?: CsvCeller): Funn[] {
   const funn = new Map<string, Funn>();
   const legg = (linje: number, type: FunnType, verdi: string, ident: boolean) => {
     const nøkkel = `${type}\u0000${verdi}`;
@@ -441,8 +449,8 @@ export function skannTekst(tekst: string, celler?: Cellebit[][]): Funn[] {
     else if (g && åpen && g.tegn === åpen.tegn && g.lengde >= åpen.lengde && g.resten.trim() === "") åpen = null;
     const iKodeblokk = varÅpen && åpen !== null;
     const linje = normaliserLinje(rå);
-    const biter = celler?.[i]?.map((b) => ({ tekst: normaliserLinje(b.tekst), celle: b.celle }));
-    const enkelt = new Set(biter ? biter.flatMap((b) => sifferkandidater(b.tekst)) : sifferkandidater(linje));
+    const biter = csv?.biter[i]?.map((b) => ({ tekst: normaliserLinje(b.tekst), celle: b.celle }));
+    const enkelt = new Set(biter ? [...biter.flatMap((b) => sifferkandidater(b.tekst)), ...(csv?.sammensatt[i] ?? [])] : sifferkandidater(linje));
     for (const tall of enkelt) {
       const type = klassifiser11(tall);
       if (type) legg(nr, type, tall, false);
@@ -791,12 +799,41 @@ function lesCsv(tekst: string): { poster: Post[] } | { feil: string } {
   return { poster };
 }
 
+const DATOCELLE = /^(?:\d{6}|(\d{2})\.(\d{2})\.(?:\d{2})?(\d{2}))$/;
+
+/**
+ * 11-sifrede kandidater satt sammen av flere celler i én post:
+ *   - en fødselsdato (6 sifre, `DD.MM.YY` eller `DD.MM.YYYY`) og 5 sifre i
+ *     neste celle som ikke er tom, med tomme celler mellom tillatt;
+ *   - et tall med tusenskilletegn uten anførselstegn: 2, 3, 3 og 3 sifre i
+ *     fire celler etter hverandre.
+ * Cellene leses uten blanke rundt. Hver kandidat har linjen den første cellen
+ * starter på.
+ */
+function sammensatteKandidater(celler: { tekst: string; linje: number }[]): { tall: string; linje: number }[] {
+  const ut: { tall: string; linje: number }[] = [];
+  const t = celler.map((c) => normaliserLinje(c.tekst).trim());
+  for (let k = 0; k < t.length; k++) {
+    const dato = DATOCELLE.exec(t[k]!);
+    if (dato) {
+      let n = k + 1;
+      while (n < t.length && t[n] === "") n++;
+      if (n < t.length && /^\d{5}$/.test(t[n]!)) ut.push({ tall: (dato[1] ? dato[1] + dato[2]! + dato[3]! : t[k]!) + t[n]!, linje: celler[k]!.linje });
+    }
+    if (k + 3 < t.length && /^\d{2}$/.test(t[k]!) && t.slice(k + 1, k + 4).every((c) => /^\d{3}$/.test(c))) {
+      ut.push({ tall: t.slice(k, k + 4).join(""), linje: celler[k]!.linje });
+    }
+  }
+  return ut;
+}
+
 /**
  * Hver linje i en CSV (delt som i `skannTekst`) som delene som hører til hver
  * celle, med anførselstegnene. Et felt i anførselstegn kan gå over flere
- * linjer og har samme løpenummer på hver. Null når filen ikke kan leses som CSV.
+ * linjer og har samme løpenummer på hver. I tillegg kandidatene fra
+ * `sammensatteKandidater` per linje. Null når filen ikke kan leses som CSV.
  */
-export function cellerPerLinje(tekst: string): Cellebit[][] | null {
+export function cellerPerLinje(tekst: string): CsvCeller | null {
   const lest = lesCsv(tekst);
   if ("feil" in lest) return null;
   const linjer: [number, number][] = [];
@@ -807,11 +844,14 @@ export function cellerPerLinje(tekst: string): Cellebit[][] | null {
   }
   linjer.push([start, tekst.length]);
   const ut: Cellebit[][] = linjer.map(() => []);
+  const sammensatt: string[][] = linjer.map(() => []);
   let l = 0;
   let nr = 0;
   for (const post of lest.poster) {
+    const celler: { tekst: string; linje: number }[] = [];
     for (const c of post.celler) {
       while (linjer[l]![1] < c.fra) l++;
+      celler.push({ tekst: c.tekst, linje: l });
       for (let j = l; j < linjer.length; j++) {
         const [fra, til] = linjer[j]!;
         if (fra > c.til) break;
@@ -821,14 +861,15 @@ export function cellerPerLinje(tekst: string): Cellebit[][] | null {
       }
       nr++;
     }
+    for (const k of sammensatteKandidater(celler)) sammensatt[k.linje]!.push(k.tall);
   }
-  return ut;
+  return { biter: ut, sammensatt };
 }
 
 /**
- * Skanner en CSV-datafil: et fødselsnummer står aldri i to celler, så sifre
- * slås bare sammen innenfor en celle. En fil som ikke kan leses som CSV,
- * skannes som en side.
+ * Skanner en CSV-datafil: sifre slås sammen innenfor en celle, og over celler
+ * bare etter reglene i `sammensatteKandidater`. En fil som ikke kan leses som
+ * CSV, skannes som en side.
  */
 export function skannCsv(tekst: string): Funn[] {
   return skannTekst(tekst, cellerPerLinje(tekst) ?? undefined);

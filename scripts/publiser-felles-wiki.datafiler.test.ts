@@ -247,12 +247,12 @@ describe("vurderFil for en datafil", () => {
     expect(v.fjernet).toEqual([{ navn: "b", rader: 1 }]);
   }, 10_000);
 
-  // Endret 2026-10-13: kopien skannes celle for celle, og sifrene står i to celler, så ingenting flagges.
-  test("CSV: sifre som havner i nabokolonner når kolonnen mellom er borte, flagges ikke i kopien", () => {
+  // Fødselsdato og personnummer i nabokolonner etter at identkolonnen mellom er fjernet: regelen for dato + 5 sifre.
+  test("CSV: et fødselsnummer som bare oppstår i kopien når kolonnen mellom er borte, avvises ved ny skanning", () => {
     const abs = skriv("r/sammen.csv", `a,b,c\n${FNR.slice(0, 6)},Z990123,${FNR.slice(6)}\n`);
     const v = vurderFil(abs, "r/sammen.csv", false, undefined, true);
     expect(v.fjernet).toEqual([{ navn: "b", rader: 1 }]);
-    expect(v.avslag).toEqual([]);
+    expect(v.avslag).toEqual([`r/sammen.csv:2: fødselsnummer *********${FNR.slice(-2)} (i kopien etter at kolonnene er fjernet)`]);
   });
 
   test("CSV: en e-postadresse avvises, kolonnen fjernes ikke", () => {
@@ -330,8 +330,8 @@ describe("en CSV-datafil skannes for fødselsnummer celle for celle", () => {
     expect(v.avslag).toEqual([`r/flerlinje.csv:3: fødselsnummer *********${FNR.slice(-2)}`]);
   });
 
-  test("(c) et nummer delt over to celler flagges ikke: et ekte fødselsnummer står aldri i to celler", () => {
-    const v = vurder("r/to-celler.csv", `a,b\n${DATO},${PERS}\n`);
+  test("(c) et nummer delt over to celler flagges ikke når den første cellen ikke er en fødselsdato", () => {
+    const v = vurder("r/to-celler.csv", `a,b\n${FNR.slice(0, 4)},${FNR.slice(4)}\n`);
     expect(v.avslag).toEqual([]);
   });
 
@@ -374,5 +374,82 @@ describe("en CSV-datafil skannes for fødselsnummer celle for celle", () => {
     mkdirSync(rot, { recursive: true });
     writeFileSync(path.join(rot, "side.md"), `${DATO},${PERS}\n`);
     expect(vurderFil(path.join(rot, "side.md"), "side.md", false).avslag).toEqual([`side.md:1: fødselsnummer *********${FNR.slice(-2)}`]);
+  });
+});
+
+describe("en CSV-datafil: fødselsdato og personnummer i hver sin celle", () => {
+  const rot = mkdtempSync(path.join(tmpdir(), "felles-csv-dato-"));
+  afterAll(() => rmSync(rot, { recursive: true, force: true }));
+  const vurder = (rel: string, innhold: string, tillatIdent = false) => {
+    mkdirSync(path.dirname(path.join(rot, rel)), { recursive: true });
+    writeFileSync(path.join(rot, rel), innhold);
+    return vurderFil(path.join(rot, rel), rel, tillatIdent, undefined, true);
+  };
+  const DATO = FNR.slice(0, 6);
+  const PERS = FNR.slice(6);
+  const PRIKK = `${DATO.slice(0, 2)}.${DATO.slice(2, 4)}.${DATO.slice(4)}`;
+  const avslag = (rel: string, type = "fødselsnummer", nr = FNR, linje = 2) => [`${rel}:${linje}: ${type} *********${nr.slice(-2)}`];
+
+  test("forutsetning: de syntetiske D- og H-numrene klassifiseres som det de heter", () => {
+    expect(klassifiser11(lagNummer("550385"))).toBe("D-nummer");
+    expect(klassifiser11(lagNummer("154385"))).toBe("H-nummer");
+  });
+
+  test("6 sifre og så 5 sifre i neste celle avvises", () => {
+    expect(vurder("r/d1.csv", `navn,fodselsdato,personnr\nOla,${DATO},${PERS}\n`).avslag).toEqual(avslag("r/d1.csv"));
+  });
+
+  test("DD.MM.YY og DD.MM.YYYY i datocellen avvises", () => {
+    expect(vurder("r/d2.csv", `navn,fodselsdato,personnr\nOla,${PRIKK},${PERS}\n`).avslag).toEqual(avslag("r/d2.csv"));
+    expect(vurder("r/d3.csv", `navn,fodselsdato,personnr\nOla,${PRIKK.slice(0, 6)}19${DATO.slice(4)},${PERS}\n`).avslag).toEqual(avslag("r/d3.csv"));
+  });
+
+  test("tomme celler mellom, blanke rundt og anførselstegn hindrer ikke sammenslåingen", () => {
+    expect(vurder("r/d4.csv", `a,b,c,d\nOla,${DATO},,${PERS}\n`).avslag).toEqual(avslag("r/d4.csv"));
+    expect(vurder("r/d5.csv", `a,b,c,d,e\nOla, ${DATO} ,, , ${PERS} \n`).avslag).toEqual(avslag("r/d5.csv"));
+    expect(vurder("r/d6.csv", `a,b,c\n"Ola","${DATO}","${PERS}"\n`).avslag).toEqual(avslag("r/d6.csv"));
+  });
+
+  test("D-nummer og H-nummer delt på samme måte avvises", () => {
+    const d = lagNummer("550385");
+    const h = lagNummer("154385");
+    expect(vurder("r/d7.csv", `a,b\n${d.slice(0, 6)},${d.slice(6)}\n`).avslag).toEqual(avslag("r/d7.csv", "D-nummer", d));
+    expect(vurder("r/d8.csv", `a,b\n${h.slice(0, 6)},${h.slice(6)}\n`).avslag).toEqual(avslag("r/d8.csv", "H-nummer", h));
+  });
+
+  test("et fødselsnummer med tusenskilletegn uten anførselstegn avvises", () => {
+    const v = vurder("r/d9.csv", `a,b,c,d\n${FNR.slice(0, 2)},${FNR.slice(2, 5)},${FNR.slice(5, 8)},${FNR.slice(8)}\n`);
+    expect(v.avslag).toEqual(avslag("r/d9.csv"));
+  });
+
+  test("ikke sammenslått: annen celle mellom, feil antall sifre, eller over to poster", () => {
+    expect(vurder("r/n1.csv", `a,b,c\n${DATO},x,${PERS}\n`).avslag).toEqual([]);
+    expect(vurder("r/n2.csv", `a,b\n${DATO},${PERS}0\n`).avslag).toEqual([]);
+    expect(vurder("r/n3.csv", `a,b\n0${DATO},${PERS}\n`).avslag).toEqual([]);
+    expect(vurder("r/n4.csv", `a\n${DATO}\n${PERS}\n`).avslag).toEqual([]);
+    expect(vurder("r/n5.csv", `a,b\n${PRIKK.replaceAll(".", "-")},${PERS}\n`).avslag).toEqual([]);
+  });
+
+  test("formen fra vedtaksdato.csv: 6 sifre, tomme celler og så et tidsstempel, flagges ikke", () => {
+    expect(vurder("r/n6.csv", `a,b,c,d,e,f,g,h,i\nMEL-1,${DATO},NY,,,,,,2023-11-27 10:15:${PERS.slice(0, 2)}\n`).avslag).toEqual([]);
+    expect(vurder("r/n7.csv", `a,b,c,d,e,f,g\n${DATO},,,,,,2023-11-27 10:15:00\n`).avslag).toEqual([]);
+  });
+});
+
+describe("en CSV-celle leser ikke sifre fra nabocellen", () => {
+  const rot = mkdtempSync(path.join(tmpdir(), "felles-csv-kant-"));
+  afterAll(() => rmSync(rot, { recursive: true, force: true }));
+  const vurder = (rel: string, innhold: string) => {
+    writeFileSync(path.join(rot, rel), innhold);
+    return vurderFil(path.join(rot, rel), rel, false, undefined, true);
+  };
+  // Hver rad gir et gyldig nummer bare når cellen tar med komma + 1 eller 2 tegn fra naboen.
+  test("ingen sifre fra cellen etter (2 og 3 tegn over kommaet)", () => {
+    expect(vurder("k1.csv", `a,b\n${FNR.slice(0, 10)},${FNR.slice(10)}\n`).avslag).toEqual([]);
+    expect(vurder("k2.csv", `a,b\n${FNR.slice(0, 9)},${FNR.slice(9)}\n`).avslag).toEqual([]);
+  });
+  test("ingen sifre fra cellen før (2 og 3 tegn over kommaet)", () => {
+    expect(vurder("k3.csv", `a,b\n${FNR.slice(0, 1)},${FNR.slice(1)}\n`).avslag).toEqual([]);
+    expect(vurder("k4.csv", `a,b\n${FNR.slice(0, 2)},${FNR.slice(2)}\n`).avslag).toEqual([]);
   });
 });
