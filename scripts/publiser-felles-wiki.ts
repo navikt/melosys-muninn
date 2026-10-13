@@ -24,8 +24,8 @@
  *   - `endret`: siden eller en datafil den viser, er ulik bøtta eller ikke
  *     lastet opp ennå. Mangler bøtta MD5 (et sammensatt objekt), regnes filen
  *     som endret. En datafil siden viser som er slettet lokalt, men fortsatt
- *     ligger i bøtta, gjør også siden endret, med en `--fjern`-linje i
- *     advarselen: `--synk` sletter aldri, så bare `--fjern` rydder den.
+ *     ligger i bøtta, gjør også siden endret, med en advarsel: `--synk`
+ *     sletter aldri, så bare `--fjern` rydder den.
  *   - `avvist`: sjekken avviser siden eller en datafil den viser nå, også mot
  *     navnene i bøtta. `--tillat-ident` virker som ved publisering.
  *   - `mangler-lokalt`: siden ligger i bøtta, men ikke under wiki-roten med
@@ -33,11 +33,16 @@
  *     ikke skiller dem; navnene sammenlignes i NFC).
  * En datafil i bøtta er sikkert foreldreløs når ingen lest side viser den og
  * hver fulgt .md- og .mdx-side er `uendret`: da er sidens lokale referanser
- * nøyaktig de bøtteversjonen har. Sikre foreldreløse listes med en sitert
- * `--fjern`-linje. Er en slik side `endret`, `avvist` eller `mangler-lokalt`,
- * kan versjonen i bøtta vise en datafil den lokale ikke viser. Da listes
- * datafilene ingen lest side viser, som mulig foreldreløse, med grunnen og
- * uten `--fjern`-linje. Exit-kode 0 når statusen ble laget, uansett tilstander.
+ * nøyaktig de bøtteversjonen har. Er en slik side `endret`, `avvist` eller
+ * `mangler-lokalt`, kan versjonen i bøtta vise en datafil den lokale ikke
+ * viser. Da listes datafilene ingen lest side viser, som mulig foreldreløse,
+ * med grunnen. En .md- eller .mdx-side som forblir avvist, holder dermed hver
+ * foreldreløs datafil i `muligensForeldreløse`.
+ * Skriptet skriver aldri en `--fjern`-kommando for en datafil: det vet ikke
+ * hvilke datafiler bøtteversjonen av en side som ikke er uendret, viser, uten
+ * å lese den. Foreldreløse og lokalt slettede datafiler listes med rådet om å
+ * sjekke at ingen publisert side viser filen før den fjernes med `--fjern`.
+ * Exit-kode 0 når statusen ble laget, uansett tilstander.
  *
  * `--status --json` skriver ett JSON-objekt på stdout og ingenting annet:
  *   { "bøtte": string,
@@ -52,19 +57,19 @@
  * ellers (`[skjult sti: …]`), også i JSON. Ved feil (exit 2) er stdout tom og
  * feilen står på stderr.
  *
- * `--synk` lager statusen og publiserer så nøyaktig de endrede sidene på
- * vanlig måte. En endret side lastes alltid opp; en datafil den viser, bare når
- * MD5 er ulik bøtta eller filen mangler der. En datafil lastes dermed aldri opp
- * uten at en side som viser den, er endret og lastes opp i samme kjøring. En
- * side som er endret bare fordi en datafil er slettet lokalt, lastes ikke opp:
- * synk skriver `--fjern`-linjen for datafilen i stedet, og siden er `endret`
- * til datafilen er fjernet fra bøtta. Avviste sider og sider som
- * mangler lokalt, rapporteres, men publiseres ikke, og oppsummeringen teller
- * dem. Med `--dry-run` lastes ingenting opp, men bøtta listes for å lage
- * statusen. Exit-kode: 2 når bøtta ikke kan listes, gcloud mangler eller
- * listen har uventet form (ingenting er lastet opp); 3 når en opplasting
- * feilet; ellers 1 når en side er avvist i statusen eller publiseringen;
- * ellers 0 (også når ingenting er endret).
+ * `--synk` lager statusen og publiserer så de endrede sidene på vanlig måte.
+ * En endret side lastes opp når siden selv eller en datafil den viser, er ulik
+ * bøtta; en datafil den viser, bare når MD5 er ulik bøtta eller filen mangler
+ * der. En datafil lastes dermed aldri opp uten at en side som viser den, er
+ * endret og lastes opp i samme kjøring. En side som er endret bare fordi en
+ * datafil er slettet lokalt, lastes ikke opp: synk lister datafilen med rådet
+ * om `--fjern` i stedet, og siden er `endret` til datafilen er fjernet fra
+ * bøtta. Avviste sider og sider som mangler lokalt, rapporteres, men
+ * publiseres ikke, og oppsummeringen teller dem. Med `--dry-run` lastes
+ * ingenting opp, men bøtta listes for å lage statusen. Exit-kode: 2 når bøtta
+ * ikke kan listes, gcloud mangler eller listen har uventet form (ingenting er
+ * lastet opp); 3 når en opplasting feilet; ellers 1 når en side er avvist i
+ * statusen eller publiseringen; ellers 0 (også når ingenting er endret).
  *
  * Skanneren er det eneste automatiske vernet mot personopplysninger: poden viser
  * alt i bøtta til hele teamet. Hver fil sjekkes, og en fil som feiler, lastes
@@ -1477,11 +1482,9 @@ interface StatusResultat {
   /**
    * Sidene som er endret bare fordi datafiler de viser, er slettet lokalt, men ligger i bøtta:
    * siden og de andre datafilene er lik bøtta, så `--synk` har ingenting å laste opp.
-   * `fjern` er objektnavnene (umaskert) til de slettede datafilene.
+   * `slettet` er de slettede datafilene, maskert.
    */
-  bareSlettet: { visning: string; fjern: string[] }[];
-  /** Objektnavnene (umaskert) til de sikre foreldreløse datafilene, til `--fjern`-linjen. */
-  foreldreløseObjekter: string[];
+  bareSlettet: { visning: string; slettet: string[] }[];
   /** MD5 per objekt i bøtta, til `--synk`. */
   md5: Map<string, string | null>;
   /** Hvor mange fulgte .md- og .mdx-sider som ikke er `uendret`, og derfor kan vise datafiler i bøtteversjonen sin. */
@@ -1501,6 +1504,13 @@ export function skallsitat(s: string): string {
 function kommando(args: string[]): string {
   return `bun scripts/publiser-felles-wiki.ts ${args.map(skallsitat).join(" ")}`;
 }
+
+/**
+ * Rådet der skriptet ellers kunne foreslått `--fjern` for en datafil. Det foreslår aldri
+ * kommandoen: en side som ikke er uendret, kan vise filen i bøtteversjonen sin.
+ */
+const FJERN_RÅD = "sjekk at ingen publisert side viser filen før du fjerner den med --fjern";
+const stor = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** Følges: en side (.md .mdx .html) hvor som helst, eller leserkonfigen på rotnivå. */
 function erFulgt(navn: string): boolean {
@@ -1597,18 +1607,14 @@ function lagStatus(bucket: string, rot: string, tillatIdent: boolean, o: Omgivel
     }
     // Hver fil sammenlignes, så hver ulik fil står i `endredeFiler`.
     const ulik = [side, ...datafiler].map((v) => sammenlign(v, s)).includes(true);
-    const slettet = [...new Set(iBøtta.map((rel) => rel.normalize("NFC")))];
-    for (const objektnavn of slettet) {
-      const visning = visningsnavn(objektnavn);
+    const slettet = [...new Set(iBøtta.map((rel) => rel.normalize("NFC")))].map((n) => visningsnavn(n));
+    for (const visning of slettet) {
       s.endredeFiler.push(visning);
-      s.advarsler.push(
-        `${visning}: finnes ikke lokalt, men ligger fortsatt i bøtta, og kortet viser den gamle filen. --synk sletter aldri; ` +
-          (visning === objektnavn ? `fjern den med: ${kommando(["--fjern", "--", objektnavn])}` : "fjern den med --fjern (stien er skjult her)"),
-      );
+      s.advarsler.push(`${visning}: finnes ikke lokalt, men ligger fortsatt i bøtta, og kortet viser den gamle filen. --synk sletter aldri; ${FJERN_RÅD}.`);
     }
     if (s.endredeFiler.length > 0) s.tilstand = "endret";
     if (ulik) endredeObjekter.push(lokal);
-    else if (slettet.length > 0) bareSlettet.push({ visning: s.relPath, fjern: slettet });
+    else if (slettet.length > 0) bareSlettet.push({ visning: s.relPath, slettet });
   }
   // Bare en `uendret` side har lokale referanser som er nøyaktig bøtteversjonens.
   const ikkeUendret = sider.filter((s) => s.tilstand !== "uendret" && kanViseData(s.objekt)).length;
@@ -1618,17 +1624,16 @@ function lagStatus(bucket: string, rot: string, tillatIdent: boolean, o: Omgivel
     .map((x) => x.navn)
     .filter((n) => datatype(n) !== null && !k.navngitt.has(n.normalize("NFC")))
     .sort();
-  const foreldreløseObjekter = ikkeUendret > 0 ? [] : uten;
+  const maskert = uten.map((n) => visningsnavn(n));
   return {
     status: {
       bøtte: bucket,
       sider: sider.map(({ objekt: _, ...s }) => s),
-      foreldreløse: foreldreløseObjekter.map((n) => visningsnavn(n)),
-      muligensForeldreløse: ikkeUendret > 0 ? uten.map((n) => visningsnavn(n)) : [],
+      foreldreløse: ikkeUendret > 0 ? [] : maskert,
+      muligensForeldreløse: ikkeUendret > 0 ? maskert : [],
     },
     endredeObjekter,
     bareSlettet,
-    foreldreløseObjekter,
     md5,
     ikkeUendret,
   };
@@ -1654,17 +1659,15 @@ function skrivStatus(r: StatusResultat, rotArg: string, hint: Valg | null, o: Om
   if (status.foreldreløse.length > 0) {
     o.ut("\nDatafiler i bøtta som ingen fulgt side viser lenger (bare til info):");
     for (const f of status.foreldreløse) o.ut(`FORELDRELØS     ${f}`);
-    // En sti med funn skrives aldri ut, så den kan ikke stå i forslaget.
-    const visbare = r.foreldreløseObjekter.filter((n) => visningsnavn(n) === n);
-    if (visbare.length > 0) o.ut(`  Fjern dem med: ${kommando(["--fjern", "--", ...visbare])}`);
-    if (visbare.length < r.foreldreløseObjekter.length) o.ut("  (en sti med funn er skjult og står ikke i --fjern-linjen)");
+    o.ut(`  ${stor(FJERN_RÅD)}.`);
   }
   if (status.muligensForeldreløse.length > 0) {
     o.ut(
       `\nDatafiler i bøtta som ingen lest side viser. ${r.ikkeUendret} fulgt(e) .md- eller .mdx-side(r) er ikke uendret ` +
-        "(endret, avvist eller mangler lokalt), og versjonen i bøtta kan vise dem, så de kan være i bruk — derfor ingen --fjern-linje:",
+        "(endret, avvist eller mangler lokalt), og versjonen i bøtta kan vise dem, så de kan være i bruk:",
     );
     for (const f of status.muligensForeldreløse) o.ut(`MULIG FORELDRELØS ${f}`);
+    o.ut(`  ${stor(FJERN_RÅD)}.`);
   }
   const antall = (t: Tilstand) => status.sider.filter((s) => s.tilstand === t).length;
   const mulige = status.muligensForeldreløse.length > 0 ? `, ${status.muligensForeldreløse.length} mulig foreldreløs(e)` : "";
@@ -1689,9 +1692,8 @@ function synk(valg: Valg, bucket: string, rot: string, rotArg: string, o: Omgive
   const info: SynkInfo = { md5: r.md5, avvistIStatus: antall("avvist"), manglerLokalt: antall("mangler-lokalt") };
   for (const b of r.bareSlettet) {
     o.ut(`\nIngenting å laste opp for ${b.visning}: bare datafiler slettet lokalt er ulik bøtta.`);
-    const visbare = b.fjern.filter((n) => visningsnavn(n) === n);
-    if (visbare.length > 0) o.ut(`  Fjern dem med: ${kommando(["--fjern", "--", ...visbare])}`);
-    if (visbare.length < b.fjern.length) o.ut("  (en sti med funn er skjult og står ikke i --fjern-linjen)");
+    for (const f of b.slettet) o.ut(`    slettet lokalt: ${f}`);
+    o.ut(`  ${stor(FJERN_RÅD)}.`);
   }
   if (r.endredeObjekter.length === 0) {
     o.ut(r.bareSlettet.length > 0 ? "\nIngenting å synke: ingen endret side har noe å laste opp." : "\nIngenting å synke: ingen fulgt side er endret.");
