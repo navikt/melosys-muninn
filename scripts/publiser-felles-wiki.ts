@@ -94,8 +94,9 @@
  *     én celle, også over flere linjer), og over et komma bare i to tilfeller
  *     i samme post: en fødselsdato (6 sifre, `DD.MM.YY` eller `DD.MM.YYYY`)
  *     fulgt av 5 sifre i neste celle som ikke er tom, og 2, 3, 3 og 3 sifre i
- *     fire celler etter hverandre (tusenskilletegn uten anførselstegn). En fil som ikke kan leses som CSV, skannes
- *     som en side. Med `--tillat-ident`
+ *     fire celler etter hverandre (tusenskilletegn uten anførselstegn). Bare komma skiller celler: i en fil delt med
+ *     semikolon eller tabulator er hver linje én celle og skannes som i en
+ *     side. En fil som ikke kan leses som CSV, skannes som en side. Med `--tillat-ident`
  *     er NAVident og e-post i en datafil advarsler, som i en side, og ingen
  *     kolonne fjernes. Uten flagget: er alle funnene i en CSV NAVident, fjernes
  *     hver kolonne med et funn fra kopien som lastes opp, og kopien skannes på
@@ -410,9 +411,11 @@ export interface CsvCeller {
 
 /**
  * Skanner tekst linje for linje. Samme type + verdi rapporteres én gang, med antall.
- * `celler` (fra `cellerPerLinje`, for en CSV): kandidater til fødselsnummer
- * finnes i hver celle for seg, aldri på tvers av et skilletegn. De andre
- * funnene leses fra hele linjen som før.
+ * `csv` (fra `cellerPerLinje`): kandidater til fødselsnummer finnes i hver
+ * celle for seg, og over celler bare etter reglene i `sammensatteKandidater`.
+ * Bare komma skiller celler, så i en fil delt med semikolon eller tabulator er
+ * hver linje én celle og skannes som i en side. De andre funnene leses fra hele
+ * linjen som før.
  */
 export function skannTekst(tekst: string, csv?: CsvCeller): Funn[] {
   const funn = new Map<string, Funn>();
