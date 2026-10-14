@@ -100,13 +100,15 @@ describe("rate av fødselsnummerfunn i tilfeldige datarader", () => {
   const mnd = () => tall(1, 12, 2);
   const fem = () => tall(10000, 99999, 5);
   const N = 20_000;
-  // `lik`: ingen celle i formen stopper sammenslåingen, så funnene er de samme
-  // som på main. `null`: main finner bare nummer som går over cellen som
-  // stopper sammenslåingen, så her finnes ingen; at main finner noen, viser
-  // at regelen virker.
+  // `lik`: formen har ingen celle som stopper sammenslåingen (en brøkdel med
+  // bare nuller skannes som den er; et semikolon gjør hele filen lik main), så
+  // funnene er de samme som på main, og main finner noen. `null`: main finner
+  // bare nummer som går over cellen som stopper sammenslåingen, så her finnes
+  // ingen; at main finner noen, viser at regelen virker.
   const former: [string, "lik" | "null", () => string][] = [
-    ["DD.MM.20YY,<5>", "lik", () => `${dag()}.${mnd()}.20${tall(0, 30, 2)},${fem()}`],
-    ["YYYY-MM-DD,<5>", "lik", () => `20${tall(0, 30, 2)}-${mnd()}-${dag()},${fem()}`],
+    ["DDMMYY,<5>", "lik", () => `${dag()}${mnd()}${tall(0, 99, 2)},${fem()}`],
+    ["DDMMYY,<5>.0", "lik", () => `${dag()}${mnd()}${tall(0, 99, 2)},${fem()}.0`],
+    ["x;DDMMYY,<1>.<3>,<1>", "lik", () => `x;${dag()}${mnd()}${tall(0, 99, 2)},${tall(0, 9, 1)}.${tall(0, 999, 3)},${tall(0, 9, 1)}`],
     ["YYYY-MM-DD HH:MM:SS,<1>,<1>", "null", () => `20${tall(0, 30, 2)}-${mnd()}-${dag()} ${tall(0, 23, 2)}:${tall(0, 59, 2)}:${tall(0, 59, 2)},${tall(0, 9, 1)},${tall(0, 9, 1)}`],
     ["<6>,<2>,<2>,<1.1>", "null", () => `${tall(0, 999999, 6)},${tall(0, 99, 2)},${tall(0, 99, 2)},${tall(0, 9, 1)}.${tall(1, 9, 1)}`],
   ];
@@ -119,11 +121,8 @@ describe("rate av fødselsnummerfunn i tilfeldige datarader", () => {
         if (skannTekst(csv).some((f) => f.type !== "organisasjonsnummer")) main++;
         if (skannCsv(csv).some((f) => f.type !== "organisasjonsnummer")) nå++;
       }
-      if (forventet === "lik") expect(nå).toBe(main);
-      else {
-        expect(main).toBeGreaterThan(0);
-        expect(nå).toBe(0);
-      }
+      expect(main).toBeGreaterThan(0);
+      expect(nå).toBe(forventet === "lik" ? main : 0);
     });
   }
 
