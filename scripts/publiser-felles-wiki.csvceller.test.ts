@@ -6,7 +6,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { klassifiser11, vurderFil } from "./publiser-felles-wiki.ts";
+import { klassifiser11, skannTekst, vurderFil } from "./publiser-felles-wiki.ts";
 
 function mod11(d: number[], w: number[]): number | null {
   const k = 11 - (w.reduce((a, x, i) => a + x * d[i]!, 0) % 11);
@@ -85,6 +85,26 @@ describe("falske funn som forsvinner (røde på origin/main)", () => {
   test("vedtaksdato-formen avvises ikke", () => {
     expect(vurder(VEDTAK).v.avslag).toEqual([]);
   });
+});
+
+describe("akseptert tap: et nummer der en del er skrevet som desimaltall eller ISO-dato (røde på origin/main)", () => {
+  // Eieren godtok dette tapet for å bli kvitt de falske funnene over. Det er
+  // de eneste formene main avviser og denne grenen slipper gjennom.
+  const tap: [string, string][] = [
+    ["<4>.<2>,<5>", `a,b\n${DATO.slice(0, 4)}.${DATO.slice(4)},${PERS}\n`],
+    ["<6>.<1>,<4>", `a,b\n${DATO}.${PERS[0]},${PERS.slice(1)}\n`],
+    ['"<2>,<2>",<7>', `a,b\n"${FNR.slice(0, 2)},${FNR.slice(2, 4)}",${FNR.slice(4)}\n`],
+    ["YYYY-MM-DD,<9>", `a,b\n19${DATO.slice(4)}-${DATO.slice(2, 4)}-${DATO.slice(0, 2)},${FNR.slice(2)}\n`],
+  ];
+  test("forutsetning: brøkdelen i <6>.<1> er ikke 0", () => {
+    expect(PERS[0]).not.toBe("0");
+  });
+  for (const [navn, csv] of tap) {
+    test(`${navn}: main finner fødselsnummeret, denne grenen avviser ikke filen`, () => {
+      expect(skannTekst(csv).some((f) => f.type === "fødselsnummer")).toBe(true);
+      expect(fnrFunn(vurder(csv).v.avslag)).toEqual([]);
+    });
+  }
 });
 
 describe("--tillat-ident gjelder datafiler (røde på origin/main)", () => {

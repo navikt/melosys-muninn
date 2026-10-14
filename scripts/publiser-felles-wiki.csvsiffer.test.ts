@@ -45,6 +45,15 @@ describe("csvSifferTekst", () => {
     expect(csvSifferTekst("a\r1.2\r2023-02-09\n")).toBe("a\r1.2\r2023-02-09\n");
   });
 
+  test("en post med to celler etter alene CR får regelen", () => {
+    expect(csvSifferTekst("a,b\r1.2,1\r2023-02-09,2\n")).toBe("a,b\rx,1\rx,2\n");
+  });
+
+  test("et komma i full bredde blir et komma etter NFKC, også utenfor anførselstegn", () => {
+    expect(csvSifferTekst("a,b\n1\uFF0C2,1\n")).toBe("a,b\nx,1\n");
+    expect(csvSifferTekst("a,b\n1\uFE502,1\n")).toBe("a,b\nx,1\n");
+  });
+
   test("en celle over flere linjer er uendret", () => {
     expect(csvSifferTekst('a,b\n"1.2\n",1\n')).toBe('a,b\n"1.2\n",1\n');
   });

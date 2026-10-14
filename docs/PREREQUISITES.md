@@ -571,13 +571,12 @@ every team member, so it refuses rather than warns:
     by `T` or a space and `HH:MM`, `:SS`, fractional seconds, and `Z`, `±HH`
     or `±HH:MM`.
 
-  A number whose fraction is all zeros (`12345.0`, `345.00`) is an integer:
-  its digits before the separator are read and the fraction is not. Everything
-  else scans as in a page: empty cells, `-`, text, quoted and multi-line
-  cells, HTML in cells, line numbers, and NAVidents, e-mail addresses and
-  organisation numbers. A CSV delimited by semicolons or tabs (one cell per
-  line), a CSV that cannot be parsed, and `.sql` and `.yaml` files are scanned
-  like a page.
+  A number whose fraction is all zeros (`12345.0`, `345.00`) scans as it is,
+  zeros included. Everything else scans as in a page: empty cells, `-`, text,
+  quoted and multi-line cells, HTML in cells, line numbers, and NAVidents,
+  e-mail addresses and organisation numbers. A CSV whose header has an
+  unquoted cell with a semicolon or tab, a CSV that cannot be parsed, and
+  `.sql` and `.yaml` files are scanned like a page.
 - **Culled pages**: `signal: none` in the frontmatter, or
   `<meta name="wiki-signal" content="none">` in an `.html` page.
 

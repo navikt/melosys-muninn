@@ -798,7 +798,11 @@ function lesCsv(tekst: string): { poster: Post[] } | { feil: string } {
 
 /** `YYYY-MM-DD`, eventuelt med klokkeslett, brøkdel av sekund og tidssone. */
 const ISO_DATO = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:[T ](?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(?:Z|[+-]\d{2}(?::\d{2})?)?)?$/;
-/** Et desimaltall. Komma kan bare stå i en celle i anførselstegn. */
+/**
+ * Et desimaltall. Et ASCII-komma står bare i en celle i anførselstegn; et
+ * komma i full bredde eller lite komma (U+FF0C, U+FE50) blir et komma etter
+ * NFKC og kan stå i en celle uten.
+ */
 const DESIMALTALL = /^([+-]?\d+)[.,](\d+)$/;
 
 /**
