@@ -485,6 +485,21 @@ describe("datafiler en side viser", () => {
     expect(r.ut).toMatch(/4 lastet opp, 0 avvist/);
   });
 
+  test("med --tillat-ident lastes CSV-en opp med NAVident-kolonnen, byte for byte lik kildefilen", () => {
+    skriv("plans/rapport.mdx", SIDE);
+    skriv("data/cases.yaml", "- id: MELOSYS-1\n  eier: Z990124\n");
+    skriv("plans/rapport-sql-resultat/Q-1.csv", CSV);
+    skriv("plans/rapport-sql-resultat/Q-1.sql", "select 1;\n");
+    const r = kjør(["--tillat-ident", rot, "plans/rapport.mdx"]);
+    expect(r.kode).toBe(0);
+    const csv = opplastinger().find((k) => k.args.at(-1)!.endsWith("Q-1.csv"))!;
+    expect(csv.stdin).toEqual(Buffer.from(CSV));
+    expect(destinasjoner()).toContain("gs://felles-test/data/cases.yaml");
+    expect(r.ut).not.toContain("fjernet kolonne");
+    expect(r.ut).toContain("NAVident *****23 (tillatt med --tillat-ident)");
+    expect(r.ut).not.toContain("Z990123");
+  });
+
   test("tørrkjøring viser hvilke kolonner som fjernes per fil, og laster ingenting opp", () => {
     skriv("plans/rapport.mdx", SIDE);
     skriv("data/cases.yaml", "- id: MELOSYS-1\n");

@@ -256,25 +256,29 @@ describe("vurderFil for en datafil", () => {
 
   test("CSV: en e-postadresse avvises, kolonnen fjernes ikke", () => {
     const abs = skriv("r/epost.csv", "a,b\n1,ola@example.no\n");
-    const v = vurderFil(abs, "r/epost.csv", true, undefined, true);
+    const v = vurderFil(abs, "r/epost.csv", false, undefined, true);
     expect(v.fjernet).toEqual([]);
     expect(v.avslag).toHaveLength(1);
     expect(v.avslag[0]).toContain("e-post");
   });
 
-  test("YAML: en NAVident avvises, også med --tillat-ident, og uten å foreslå flagget", () => {
+  // Endret 2026-10-14: --tillat-ident gjelder også datafiler.
+  test("YAML: en NAVident avvises uten --tillat-ident og er en advarsel med", () => {
     const abs = skriv("r/cases.yaml", "- id: MELOSYS-1\n  eier: Z990123\n");
-    const v = vurderFil(abs, "r/cases.yaml", true, undefined, true);
-    expect(v.fjernet).toEqual([]);
-    expect(v.avslag).toEqual(["r/cases.yaml:2: NAVident *****23"]);
-    expect(v.advarsler).toEqual([]);
+    const uten = vurderFil(abs, "r/cases.yaml", false, undefined, true);
+    expect(uten.fjernet).toEqual([]);
+    expect(uten.avslag).toEqual(["r/cases.yaml:2: NAVident *****23 (bruk --tillat-ident hvis dette er med vilje)"]);
+    const med = vurderFil(abs, "r/cases.yaml", true, undefined, true);
+    expect(med.avslag).toEqual([]);
+    expect(med.advarsler).toEqual(["r/cases.yaml:2: NAVident *****23 (tillatt med --tillat-ident)"]);
   });
 
-  test("en NAVident i filnavnet avvises også med --tillat-ident", () => {
+  test("en NAVident i filnavnet avvises uten --tillat-ident og er en advarsel med", () => {
     const abs = skriv("r/Z990123.csv", "a\n1\n");
-    const v = vurderFil(abs, "r/Z990123.csv", true, undefined, true);
-    expect(v.avslag.join("\n")).toContain("filnavnet har NAVident");
-    expect(v.advarsler).toEqual([]);
+    expect(vurderFil(abs, "r/Z990123.csv", false, undefined, true).avslag.join("\n")).toContain("filnavnet har NAVident");
+    const med = vurderFil(abs, "r/Z990123.csv", true, undefined, true);
+    expect(med.avslag).toEqual([]);
+    expect(med.advarsler).toEqual(["filnavnet har NAVident *****23 (tillatt med --tillat-ident)"]);
   });
 
   test("SQL: en NAVident avvises", () => {
