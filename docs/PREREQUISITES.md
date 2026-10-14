@@ -574,8 +574,8 @@ every team member, so it refuses rather than warns:
   A number whose fraction is all zeros (`12345.0`, `345.00`) scans as it is,
   zeros included. Everything else scans as in a page: empty cells, `-`, text,
   quoted and multi-line cells, HTML in cells, line numbers, and NAVidents,
-  e-mail addresses and organisation numbers. A CSV whose header has an
-  unquoted cell with a semicolon or tab, a CSV that cannot be parsed, and
+  e-mail addresses and organisation numbers. A CSV with an unquoted
+  semicolon or tab in any cell of any row, a CSV that cannot be parsed, and
   `.sql` and `.yaml` files are scanned like a page.
 - **Culled pages**: `signal: none` in the frontmatter, or
   `<meta name="wiki-signal" content="none">` in an `.html` page.

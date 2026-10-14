@@ -65,6 +65,11 @@ describe("falske funn som forsvinner (røde på origin/main)", () => {
     expect(v.fjernet).toEqual([{ navn: "ENDRET_AV", rader: 1 }]);
   });
 
+  test("en brøkdel som begynner med 0, men ikke bare er nuller, stopper sammenslåingen", () => {
+    expect(skannTekst(QG.replace(",1.2,", ",1.05,")).some((f) => f.type === "fødselsnummer")).toBe(true);
+    expect(vurder(QG.replace(",1.2,", ",1.05,")).v.avslag).toEqual([]);
+  });
+
   test("desimalkomma i en celle i anførselstegn stopper sammenslåingen", () => {
     expect(vurder(`a,b,c,d\n${IDENT},30,25,"1,2"\n`).v.avslag).toEqual([]);
   });
@@ -187,6 +192,20 @@ describe("paritet: avvises som på origin/main", () => {
     for (const skille of [";", "\t"]) {
       const { rel, v } = vurder(`navn${skille}verdi\nx${skille}${rad}\n`);
       expect(fnrFunn(v.avslag)).toEqual([`${rel}:2: fødselsnummer *********${P}`]);
+    }
+  });
+
+  // Et semikolon eller en tabulator uten anførselstegn hvor som helst i filen
+  // gir skanning som på main, også når overskriften ikke viser det.
+  test("semikolon eller tabulator i en datarad: skannes som på main uansett overskrift", () => {
+    const rad = `${DATO},${PERS[0]}.${PERS.slice(1, 4)},${PERS[4]}`;
+    for (const skille of [";", "\t"]) {
+      const overskrifter = [" \n", `Rapport oktober\nnavn${skille}verdi\n`, "navn\n", `"navn${skille}verdi"\n`, "navn,verdi\n"];
+      for (const o of overskrifter) {
+        const { rel, v } = vurder(`${o}x${skille}${rad}\n`);
+        const linje = o.split("\n").length;
+        expect(fnrFunn(v.avslag)).toEqual([`${rel}:${linje}: fødselsnummer *********${P}`]);
+      }
     }
   });
 

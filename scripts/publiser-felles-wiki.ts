@@ -125,8 +125,8 @@
  *     det er, nullene med. Alt annet skannes som
  *     i en side: tomme celler, `-`, tekst, celler i anførselstegn og over
  *     flere linjer, HTML i celler, linjenummer, og NAVident, e-post og
- *     organisasjonsnummer. En CSV der en overskriftscelle uten anførselstegn
- *     har semikolon eller tabulator, en CSV som ikke kan leses, og .sql og
+ *     organisasjonsnummer. En CSV der en celle uten anførselstegn, i hvilken
+ *     som helst rad, har semikolon eller tabulator, en CSV som ikke kan leses, og .sql og
  *     .yaml skannes som en side. Bare e-post og NAVident kan slippes med
  *     `--tillat-ident`; et fødselsnummer har ingen overstyring.
  *   - culled: `signal: none` i frontmatter eller
@@ -824,15 +824,18 @@ function sifferCelle(c: Celle): string | null {
 /**
  * Teksten skanneren leser kandidater til fødselsnummer fra i en CSV-datafil:
  * i hver post med minst to celler byttes en celle som ikke kan holde en del
- * av et nummer, ut etter `sifferCelle`. Er overskriften delt med semikolon
- * eller tabulator, er et komma ikke et skilletegn, og teksten er uendret. Bokstaven `x` stopper sammenslåingen
- * over cellen, slik en bokstav gjør i en side. Linjene er de samme som i
- * kildeteksten. Null når filen ikke kan leses som CSV.
+ * av et nummer, ut etter `sifferCelle`. Har en celle uten anførselstegn et
+ * semikolon eller en tabulator, i hvilken som helst post, kan filen være
+ * delt med det tegnet, et komma er da ikke sikkert et skilletegn, og teksten
+ * er uendret. Bokstaven `x` stopper sammenslåingen over cellen, slik en
+ * bokstav gjør i en side. Linjene er de samme som i kildeteksten. Null når
+ * filen ikke kan leses som CSV.
  */
 export function csvSifferTekst(tekst: string): string | null {
   const lest = lesCsv(tekst);
   if ("feil" in lest) return null;
-  if (overskriftSkilletegn(lest.poster)) return tekst;
+  // Hele filen, ikke bare overskriften: en tittellinje, en overskrift med én kolonne eller i anførselstegn skjuler skilletegnet.
+  if (lest.poster.some((p) => p.celler.some((c) => !c.sitert && /[;\t]/.test(c.tekst)))) return tekst;
   const biter: string[] = [];
   let pos = 0;
   for (const post of lest.poster) {

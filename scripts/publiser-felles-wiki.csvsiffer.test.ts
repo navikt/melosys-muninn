@@ -25,6 +25,22 @@ describe("csvSifferTekst", () => {
     expect(csvSifferTekst('a,b\n"12345,00",1\n')).toBe('a,b\n"12345,00",1\n');
   });
 
+  test("en brøkdel som begynner med 0, men ikke bare er nuller, blir x", () => {
+    expect(csvSifferTekst('a,b,c\n1.05,-3.007,"2,01"\n')).toBe("a,b,c\nx,x,x\n");
+  });
+
+  test("semikolon eller tabulator uten anførselstegn hvor som helst i filen: uendret", () => {
+    for (const s of [";", "\t"]) {
+      for (const t of [` \nx${s}1,1.2\n`, `Rapport oktober\nnavn${s}verdi\nx${s}1,1.2\n`, `navn\nx${s}1,1.2\n`, `"navn${s}verdi"\nx${s}1,1.2\n`, `navn,verdi\nx${s}1,1.2\n`, `a,b\n1.2,1\n2023-02-09,x${s}y\n`]) {
+        expect(csvSifferTekst(t)).toBe(t);
+      }
+    }
+  });
+
+  test("semikolon eller tabulator bare i en celle i anførselstegn: regelen gjelder", () => {
+    expect(csvSifferTekst('"a;b",c\n1.2,"x\ty"\n')).toBe('"a;b",c\nx,"x\ty"\n');
+  });
+
   test("overskrift delt med semikolon eller tabulator: uendret, også poster med komma", () => {
     for (const t of ["a;b\nx;1,1.2,2023-02-09\n", "a\tb\nx\t1,1.2,2023-02-09\n", "\na;b\n1,1.2\n"]) {
       expect(csvSifferTekst(t)).toBe(t);
