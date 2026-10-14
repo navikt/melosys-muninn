@@ -134,6 +134,42 @@ describe("paritet: avvises som på origin/main", () => {
     });
   }
 
+  test("pandas: <6>,<5>.0 ved siden av et desimaltall", () => {
+    const { rel, v } = vurder(`a,b,c\n${DATO},${PERS}.0,1.5\n`);
+    expect(fnrFunn(v.avslag)).toEqual([`${rel}:2: fødselsnummer *********${P}`]);
+  });
+
+  describe("bare nuller i brøkdelen: cellen skannes som på main, nullene med", () => {
+    // Siste siffer 0, så `<10 sifre>.0` er hele nummeret; tredje siffer 0, så `15.0` er de tre første.
+    const F0 = lagNummer(DATO, (fem) => fem.endsWith("0"));
+    const P0 = F0.slice(-2);
+    const nullformer: [string, string][] = [
+      ["én celle <10>.0", `a,b,c\n1,${F0.slice(0, 10)}.0,2\n`],
+      ["x,<6>,<4>.0", `a,b,c\nx,${F0.slice(0, 6)},${F0.slice(6, 10)}.0\n`],
+      ["<2>.0,<8>", `a,b\n${F0.slice(0, 2)}.0,${F0.slice(3)}\n`],
+      ['"<2>,0",<8>', `a,b\n"${F0.slice(0, 2)},0",${F0.slice(3)}\n`],
+      ["-<2>.0,<8>", `a,b\n-${F0.slice(0, 2)}.0,${F0.slice(3)}\n`],
+    ];
+    test("forutsetning: nummeret har 0 som tredje og siste siffer", () => {
+      expect(F0[2]).toBe("0");
+      expect(F0[10]).toBe("0");
+    });
+    for (const [navn, csv] of nullformer) {
+      test(`${navn}: fødselsnummer`, () => {
+        const { rel, v } = vurder(csv);
+        expect(fnrFunn(v.avslag)).toEqual([`${rel}:2: fødselsnummer *********${P0}`]);
+      });
+    }
+  });
+
+  test("semikolondelt overskrift: et desimaltall etter et komma i en datarad stopper ikke sammenslåingen", () => {
+    const rad = `${DATO},${PERS[0]}.${PERS.slice(1, 4)},${PERS[4]}`;
+    for (const skille of [";", "\t"]) {
+      const { rel, v } = vurder(`navn${skille}verdi\nx${skille}${rad}\n`);
+      expect(fnrFunn(v.avslag)).toEqual([`${rel}:2: fødselsnummer *********${P}`]);
+    }
+  });
+
   test("alene CR: postene står på én linje for skanneren", () => {
     const { rel, v } = vurder(`a,b\rx,${DATO}\r${PERS},y\n`);
     expect(fnrFunn(v.avslag)).toEqual([`${rel}:1: fødselsnummer *********${P}`]);

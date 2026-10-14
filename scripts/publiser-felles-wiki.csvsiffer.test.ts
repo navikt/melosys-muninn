@@ -18,11 +18,17 @@ describe("csvSifferTekst", () => {
     }
   });
 
-  test("desimaltall med brøkdel blir x; med bare nuller i brøkdelen blir det heltallet", () => {
+  test("desimaltall med brøkdel blir x; med bare nuller i brøkdelen skannes det som det er", () => {
     expect(csvSifferTekst("a,b,c,d\n1.2,-3.5,+0.25,1\n")).toBe("a,b,c,d\nx,x,x,1\n");
     expect(csvSifferTekst('a,b\n"1,2",1\n')).toBe("a,b\nx,1\n");
-    expect(csvSifferTekst("a,b,c\n12345.0,345.00,-7.000\n")).toBe("a,b,c\n12345,345,-7\n");
-    expect(csvSifferTekst('a,b\n"12345,00",1\n')).toBe("a,b\n12345,1\n");
+    expect(csvSifferTekst("a,b,c\n12345.0,345.00,-7.000\n")).toBe("a,b,c\n12345.0,345.00,-7.000\n");
+    expect(csvSifferTekst('a,b\n"12345,00",1\n')).toBe('a,b\n"12345,00",1\n');
+  });
+
+  test("overskrift delt med semikolon eller tabulator: uendret, også poster med komma", () => {
+    for (const t of ["a;b\nx;1,1.2,2023-02-09\n", "a\tb\nx\t1,1.2,2023-02-09\n", "\na;b\n1,1.2\n"]) {
+      expect(csvSifferTekst(t)).toBe(t);
+    }
   });
 
   test("desimaltall med 11 sifre eller flere skannes som det er", () => {
@@ -69,14 +75,18 @@ describe("rate av fødselsnummerfunn i tilfeldige datarader", () => {
   const mnd = () => tall(1, 12, 2);
   const fem = () => tall(10000, 99999, 5);
   const N = 20_000;
-  const former: [string, () => string][] = [
-    ["DD.MM.20YY,<5>", () => `${dag()}.${mnd()}.20${tall(0, 30, 2)},${fem()}`],
-    ["YYYY-MM-DD,<5>", () => `20${tall(0, 30, 2)}-${mnd()}-${dag()},${fem()}`],
-    ["YYYY-MM-DD HH:MM:SS,<1>,<1>", () => `20${tall(0, 30, 2)}-${mnd()}-${dag()} ${tall(0, 23, 2)}:${tall(0, 59, 2)}:${tall(0, 59, 2)},${tall(0, 9, 1)},${tall(0, 9, 1)}`],
-    ["<6>,<2>,<2>,<1.1>", () => `${tall(0, 999999, 6)},${tall(0, 99, 2)},${tall(0, 99, 2)},${tall(0, 9, 1)}.${tall(1, 9, 1)}`],
+  // `lik`: ingen celle i formen stopper sammenslåingen, så funnene er de samme
+  // som på main. `null`: main finner bare nummer som går over cellen som
+  // stopper sammenslåingen, så her finnes ingen; at main finner noen, viser
+  // at regelen virker.
+  const former: [string, "lik" | "null", () => string][] = [
+    ["DD.MM.20YY,<5>", "lik", () => `${dag()}.${mnd()}.20${tall(0, 30, 2)},${fem()}`],
+    ["YYYY-MM-DD,<5>", "lik", () => `20${tall(0, 30, 2)}-${mnd()}-${dag()},${fem()}`],
+    ["YYYY-MM-DD HH:MM:SS,<1>,<1>", "null", () => `20${tall(0, 30, 2)}-${mnd()}-${dag()} ${tall(0, 23, 2)}:${tall(0, 59, 2)}:${tall(0, 59, 2)},${tall(0, 9, 1)},${tall(0, 9, 1)}`],
+    ["<6>,<2>,<2>,<1.1>", "null", () => `${tall(0, 999999, 6)},${tall(0, 99, 2)},${tall(0, 99, 2)},${tall(0, 9, 1)}.${tall(1, 9, 1)}`],
   ];
-  for (const [navn, rad] of former) {
-    test(`${navn}: ikke flere funn enn på main`, () => {
+  for (const [navn, forventet, rad] of former) {
+    test(`${navn}: ${forventet === "lik" ? "samme funn som på main" : "ingen funn, main har noen"}`, () => {
       let main = 0;
       let nå = 0;
       for (let i = 0; i < N; i++) {
@@ -84,7 +94,11 @@ describe("rate av fødselsnummerfunn i tilfeldige datarader", () => {
         if (skannTekst(csv).some((f) => f.type !== "organisasjonsnummer")) main++;
         if (skannCsv(csv).some((f) => f.type !== "organisasjonsnummer")) nå++;
       }
-      expect(nå).toBeLessThanOrEqual(main);
+      if (forventet === "lik") expect(nå).toBe(main);
+      else {
+        expect(main).toBeGreaterThan(0);
+        expect(nå).toBe(0);
+      }
     });
   }
 

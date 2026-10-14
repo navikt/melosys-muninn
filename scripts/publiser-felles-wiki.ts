@@ -121,13 +121,13 @@
  *       - en ISO-dato `YYYY-MM-DD` med gyldig måned og dag, eventuelt fulgt
  *         av `T` eller mellomrom og `HH:MM`, `:SS`, brøkdel av sekund og `Z`,
  *         `±HH` eller `±HH:MM`.
- *     Et tall med bare nuller i brøkdelen (`12345.0`, `345.00`) er et heltall:
- *     sifrene foran skilletegnet leses, brøkdelen ikke. Alt annet skannes som
+ *     Et tall med bare nuller i brøkdelen (`12345.0`, `345.00`) skannes som
+ *     det er, nullene med. Alt annet skannes som
  *     i en side: tomme celler, `-`, tekst, celler i anførselstegn og over
  *     flere linjer, HTML i celler, linjenummer, og NAVident, e-post og
- *     organisasjonsnummer. En CSV delt med semikolon eller tabulator (én
- *     celle per linje), en CSV som ikke kan leses, og .sql og .yaml skannes
- *     som en side. Bare e-post og NAVident kan slippes med
+ *     organisasjonsnummer. En CSV der en overskriftscelle uten anførselstegn
+ *     har semikolon eller tabulator, en CSV som ikke kan leses, og .sql og
+ *     .yaml skannes som en side. Bare e-post og NAVident kan slippes med
  *     `--tillat-ident`; et fødselsnummer har ingen overstyring.
  *   - culled: `signal: none` i frontmatter eller
  *     `<meta name="wiki-signal" content="none">`.
@@ -804,8 +804,8 @@ const DESIMALTALL = /^([+-]?\d+)[.,](\d+)$/;
 /**
  * Det cellen byttes ut med i `csvSifferTekst`, eller null når den skannes som
  * den er: `x` for en ISO-dato og for et desimaltall med færre enn 11 sifre og
- * en brøkdel som ikke bare er nuller; heltallsdelen for et tall med bare
- * nuller i brøkdelen (`12345.0`).
+ * en brøkdel som ikke bare er nuller. Et tall med bare nuller i brøkdelen
+ * (`12345.0`) skannes som det er, nullene med, som på main.
  */
 function sifferCelle(c: Celle): string | null {
   if (/[\r\n]/.test(c.tekst)) return null;
@@ -813,20 +813,22 @@ function sifferCelle(c: Celle): string | null {
   if (ISO_DATO.test(t)) return "x";
   const d = DESIMALTALL.exec(t);
   if (!d) return null;
-  if (/^0+$/.test(d[2]!)) return d[1]!;
+  if (/^0+$/.test(d[2]!)) return null;
   return t.replace(/\D/g, "").length < 11 ? "x" : null;
 }
 
 /**
  * Teksten skanneren leser kandidater til fødselsnummer fra i en CSV-datafil:
  * i hver post med minst to celler byttes en celle som ikke kan holde en del
- * av et nummer, ut etter `sifferCelle`. Bokstaven `x` stopper sammenslåingen
+ * av et nummer, ut etter `sifferCelle`. Er overskriften delt med semikolon
+ * eller tabulator, er et komma ikke et skilletegn, og teksten er uendret. Bokstaven `x` stopper sammenslåingen
  * over cellen, slik en bokstav gjør i en side. Linjene er de samme som i
  * kildeteksten. Null når filen ikke kan leses som CSV.
  */
 export function csvSifferTekst(tekst: string): string | null {
   const lest = lesCsv(tekst);
   if ("feil" in lest) return null;
+  if (overskriftSkilletegn(lest.poster)) return tekst;
   const biter: string[] = [];
   let pos = 0;
   for (const post of lest.poster) {
@@ -850,6 +852,17 @@ export function skannCsv(tekst: string): Funn[] {
 /** En tom linje: én tom celle uten anførselstegn. Muninns leser hopper over den. */
 function erTom(p: Post): boolean {
   return p.celler.length === 1 && p.celler[0]!.tekst === "" && !p.celler[0]!.sitert;
+}
+
+/**
+ * `semikolon` eller `tabulator` når en celle uten anførselstegn i overskriften
+ * (første post som ikke er en tom linje) har det tegnet, ellers null.
+ */
+function overskriftSkilletegn(poster: Post[]): "semikolon" | "tabulator" | null {
+  const overskrift = poster.find((p) => !erTom(p))?.celler ?? [];
+  // Et komma i et felt (desimalkomma) gir en semikolondelt fil flere kolonner, så bredden alene avslører den ikke.
+  const usitert = overskrift.filter((c) => !c.sitert).map((c) => c.tekst).join("");
+  return usitert.includes(";") ? "semikolon" : usitert.includes("\t") ? "tabulator" : null;
 }
 
 function skrivCelle(c: Celle): string {
@@ -893,9 +906,7 @@ export function fjernIdentKolonner(tekst: string): { tekst: string; fjernet: Fje
   }
   if (treff.size === 0) return { tekst, fjernet: [] };
   const overskrift = poster.find((p) => !erTom(p))?.celler ?? [];
-  // Et komma i et felt (desimalkomma) gir en semikolondelt fil flere kolonner, så bredden alene avslører den ikke.
-  const usitert = overskrift.filter((c) => !c.sitert).map((c) => c.tekst).join("");
-  const skilletegn = usitert.includes(";") ? "semikolon" : usitert.includes("\t") ? "tabulator" : null;
+  const skilletegn = overskriftSkilletegn(poster);
   if (skilletegn) return `overskriften er delt med ${skilletegn}; ${BARE_KOMMADELT}`;
   const bredde = overskrift.length;
   if (bredde < 2) return `overskriften har færre enn to kolonner; ${BARE_KOMMADELT}`;
