@@ -525,8 +525,10 @@ every team member, so it refuses rather than warns:
   files muninn's reader reads, and sometimes more; every file it finds is
   checked like a page. A data file given on its own, with no page naming it,
   is refused, and a data file is uploaded only when at least one page naming it
-  passed every check and was uploaded in the same run. `--tillat-ident` does
-  not apply to data files. When every hit in a CSV is a NAVident, each column
+  passed every check and was uploaded in the same run. With `--tillat-ident`,
+  a NAVident or an e-mail address in a data file is a warning, as in a page,
+  and the file is uploaded byte for byte with no column dropped. Without the
+  flag, when every hit in a CSV is a NAVident, each column
   with a hit is dropped from the uploaded copy, the script prints the dropped
   columns per file, and the copy is scanned again; the local file is not
   changed. Only a well-formed, comma-separated, rectangular CSV is cleaned;
@@ -541,10 +543,11 @@ every team member, so it refuses rather than warns:
 
   The header is the first record that is not a blank line. Blank lines are
   allowed anywhere and kept. A semicolon or tab inside a data row does not
-  refuse the file. A file with no NAVident is uploaded unchanged. A
-  NAVident in a `.sql` or `.yaml` is refused, and any other hit — an identity
-  number, a D- or H-number, an organisation number or an e-mail address — is
-  refused in every data file, before any column is dropped.
+  refuse the file. A file with no NAVident is uploaded unchanged. Without the
+  flag, a NAVident in a `.sql` or `.yaml` and an e-mail address in any data
+  file are refused. An identity number, a D- or H-number or an organisation
+  number is refused in every data file, before any column is dropped, also
+  with the flag.
 - **Size**: over 2 MB for a page, or 1 MB for a data file, the mirror skips the
   object, so the script refuses it.
 - **Encoding**: a UTF-16 or UTF-32 file (a byte-order mark or NUL bytes) is
@@ -558,6 +561,22 @@ every team member, so it refuses rather than warns:
   table cells, aligned columns, HTML cells (also one per line) or formatting
   are joined before the check-digit test. `--tillat-ident` lets
   e-mail addresses and NAVidents through; an identity number has no override.
+
+  A CSV data file joins digits the same way, across commas and empty cells
+  too, except across a cell that cannot hold part of a number. In each record
+  with at least two cells, such a cell (ignoring surrounding blanks) is:
+  - a decimal number with fewer than 11 digits and a fraction that is not all
+    zeros (`1.2`, `-3.5`, or `"1,2"` in quotes);
+  - an ISO date `YYYY-MM-DD` with a valid month and day, optionally followed
+    by `T` or a space and `HH:MM`, `:SS`, fractional seconds, and `Z`, `±HH`
+    or `±HH:MM`.
+
+  A number whose fraction is all zeros (`12345.0`, `345.00`) scans as it is,
+  zeros included. Everything else scans as in a page: empty cells, `-`, text,
+  quoted and multi-line cells, HTML in cells, line numbers, and NAVidents,
+  e-mail addresses and organisation numbers. A CSV with an unquoted
+  semicolon or tab in any cell of any row, a CSV that cannot be parsed, and
+  `.sql` and `.yaml` files are scanned like a page.
 - **Culled pages**: `signal: none` in the frontmatter, or
   `<meta name="wiki-signal" content="none">` in an `.html` page.
 

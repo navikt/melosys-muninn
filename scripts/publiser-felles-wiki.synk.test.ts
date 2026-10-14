@@ -187,6 +187,17 @@ describe("--status", () => {
     expect(stdout).not.toContain("Z990123");
   });
 
+  test("med --tillat-ident sammenlignes kildefilen med NAVident-kolonnen, og identen er en advarsel", () => {
+    skriv("plans/r.mdx", SIDE);
+    skriv("plans/rapport/Q-1.csv", CSV_MED_IDENT);
+    bøtte({ "plans/r.mdx": SIDE, "plans/rapport/Q-1.csv": CSV_MED_IDENT });
+    const { data, stdout } = json(["--tillat-ident"]);
+    const s = side(data, "plans/r.mdx")!;
+    expect(s.tilstand).toBe("uendret");
+    expect(s.advarsler).toContain("plans/rapport/Q-1.csv:2: NAVident *****23 (tillatt med --tillat-ident)");
+    expect(stdout).not.toContain("Z990123");
+  });
+
   test("mangler-lokalt: siden er i bøtta, ikke under roten", () => {
     bøtte({ "plans/borte.md": "# Borte\n" });
     const r = kjør(["--status", rot]);
@@ -302,6 +313,17 @@ describe("--synk", () => {
     expect(r.kode).toBe(0);
     expect(destinasjoner()).toEqual(["gs://felles-test/plans/r.mdx", "gs://felles-test/plans/rapport/Q-1.csv"]);
     expect(kall().find((k) => k.args.at(-1)?.endsWith("Q-1.csv"))!.stdin).toBe("a,b\n1,9\n");
+  });
+
+  test("med --tillat-ident lastes CSV-en opp med identkolonnen, lik kildefilen", () => {
+    skriv("plans/r.mdx", SIDE);
+    skriv("plans/rapport/Q-1.csv", CSV_MED_IDENT);
+    bøtte({ "plans/r.mdx": SIDE, "plans/rapport/Q-1.csv": CSV_STRIPPET });
+    const r = kjør(["--synk", "--tillat-ident", rot]);
+    expect(r.kode).toBe(0);
+    expect(destinasjoner()).toEqual(["gs://felles-test/plans/r.mdx", "gs://felles-test/plans/rapport/Q-1.csv"]);
+    expect(kall().find((k) => k.args.at(-1)?.endsWith("Q-1.csv"))!.stdin).toBe(CSV_MED_IDENT);
+    expect(r.ut).not.toContain("Z990123");
   });
 
   test("--dry-run laster ingenting opp", () => {
