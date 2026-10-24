@@ -130,18 +130,26 @@ describe("NAVident og duplikater", () => {
 });
 
 describe("dato med firesifret år blir ikke del av et fødselsnummer", () => {
-  // `| 23.10.2026 | 950 |` i saksregisteret ga 23102026950, som har gyldige kontrollsifre.
+  // En behandlings-ID i cellen etter en dato kan gi 11 sifre med gyldige kontrollsifre.
   let id = "";
   for (let n = 0; n < 1000 && !id; n++) {
     const s = String(n).padStart(3, "0");
     if (klassifiser11(`23102026${s}`)) id = s;
   }
-  test("dato + behandlings-ID i neste celle", () => {
+  test.each([["23.10.2026"], ["23/10/2026"], ["23-10-2026"], ["kl.23.10.2026"]])("%s + behandlings-ID i neste celle", (dato) => {
     expect(id).not.toBe("");
-    expect(skannTekst(`| MEL-1 | 2025 | 23.10.2026 | ${id} | NAV og Skatt |  |`)).toEqual([]);
+    expect(skannTekst(`| MEL-1 | 2025 | ${dato} | ${id} | NAV og Skatt |  |`)).toEqual([]);
   });
-  test("samme sifre med tosifret år fanges fortsatt", () => {
-    expect(typer(`| 231020 | 26${id} |`)).toEqual(["fødselsnummer"]);
+  test("datoen skiller to halvdeler som en bokstav", () => {
+    expect(skannTekst(`| ${DATO} | 01.02.2026 | ${PERS} |`)).toEqual([]);
+  });
+  // `15.03.8550 060`: de fire sifrene etter DD.MM. er ÅÅ og starten på personnummeret.
+  test("DD.MM.ÅÅNN NNN fanges", () => {
+    expect(typer(`${DATO.slice(0, 2)}.${DATO.slice(2, 4)}.${DATO.slice(4)}${PERS.slice(0, 2)} ${PERS.slice(2)}`)).toEqual(["fødselsnummer"]);
+  });
+  test("DD.MM.ÅÅNNNNN med år 20 fanges", () => {
+    const fnr = lagNummer("150320");
+    expect(typer(`15.03.20${fnr.slice(6)}`)).toEqual(["fødselsnummer"]);
   });
 });
 

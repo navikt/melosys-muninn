@@ -109,8 +109,8 @@
  *     over objektet, så det avvises her.
  *   - koding: UTF-16 og UTF-32 (merke eller NUL-byte) avvises.
  *   - innhold og filnavn: fødselsnummer, D-nummer og H-nummer (kontrollsifre +
- *     dato; en dato med firesifret år, `23.10.2026`, er aldri en del av et),
- *     e-postadresser og NAVident. Et organisasjonsnummer er offentlig
+ *     dato; en dato med år 19xx–20xx, `23.10.2026`, blir ikke del av et slikt
+ *     nummer, se DATO_FIRESIFRET_ÅR), e-postadresser og NAVident. Et organisasjonsnummer er offentlig
  *     (Enhetsregisteret) og skannes ikke. Teksten normaliseres først (NFKC, HTML-
  *     entiteter, usynlige tegn), så også sifre skilt av tabellceller eller
  *     formatering fanges. I en CSV-datafil slås sifre sammen på samme måte,
@@ -294,11 +294,13 @@ const MAKS_MELLOMROM_PROJEKSJON = 5;
 const SKILLEREKKE = /(?:\s|\||<[^<>]{0,200}>)+/g;
 
 /**
- * En dato med firesifret år (`23.10.2026`). Et fødselsnummer har tosifret år,
- * så datoen er aldri en del av et; uten dette ble `| 23.10.2026 | 950 |` et
- * gyldig fødselsnummer.
+ * En dato med år 19xx eller 20xx (`23.10.2026`, `23/10/2026`, `23-10-2026`).
+ * Et fødselsnummer har tosifret år, så en dato med behandlings-ID i neste
+ * celle blir ikke et; et år utenfor 19xx–20xx (`15.03.8550 060`) kan være ÅÅ
+ * og starten på personnummeret og skannes som før. Et fødselsnummer med ÅÅ 19
+ * eller 20 skrevet `DD.MM.ÅÅNN NNN` fanges ikke.
  */
-const DATO_FIRESIFRET_ÅR = /(?<![\d.])(?:0?[1-9]|[12]\d|3[01])\.(?:0?[1-9]|1[0-2])\.\d{4}(?!\d)/g;
+const DATO_FIRESIFRET_ÅR = /(?<!\d)(?:0?[1-9]|[12]\d|3[01])([./-])(?:0?[1-9]|1[0-2])\1(?:19|20)\d\d(?!\d)/g;
 
 /**
  * 11-sifrede kandidater fra linjens sifre alene. Hver rekke av blanke, `|` og
