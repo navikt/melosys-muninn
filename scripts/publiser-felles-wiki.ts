@@ -103,20 +103,20 @@
  *     annet antall kolonner enn overskriften, når det blir ingen kolonner igjen, og
  *     når kopien blir større enn 1 MB. Uten `--tillat-ident` avvises en NAVident
  *     i en .sql eller .yaml og en e-postadresse i alle datafiler. Et
- *     fødselsnummer, D-nummer eller H-nummer avvises i
- *     alle datafiler, før noen kolonne fjernes, også med flagget.
+ *     fødselsnummer, D-nummer eller H-nummer avvises i alle datafiler, før
+ *     noen kolonne fjernes, også med flagget.
  *   - størrelse: over 2 MB for en side, 1 MB for en datafil, hopper speilet
  *     over objektet, så det avvises her.
  *   - koding: UTF-16 og UTF-32 (merke eller NUL-byte) avvises.
  *   - innhold og filnavn: fødselsnummer, D-nummer og H-nummer (kontrollsifre +
  *     dato; en dato med år 19xx–20xx, `23.10.2026`, blir ikke del av et slikt
- *     nummer, se DATO_FIRESIFRET_ÅR), e-postadresser og NAVident. Et organisasjonsnummer er offentlig
- *     (Enhetsregisteret) og skannes ikke. Teksten normaliseres først (NFKC, HTML-
- *     entiteter, usynlige tegn), så også sifre skilt av tabellceller eller
- *     formatering fanges. I en CSV-datafil slås sifre sammen på samme måte,
- *     også over komma og tomme celler, men ikke over en celle som ikke kan
- *     holde en del av et nummer: en celle i en post med minst to celler som
- *     (uten blanke rundt) er
+ *     nummer, se DATO_FIRESIFRET_ÅR), e-postadresser og NAVident. Et
+ *     organisasjonsnummer er offentlig (Enhetsregisteret) og skannes ikke.
+ *     Teksten normaliseres først (NFKC, HTML-entiteter, usynlige tegn), så
+ *     også sifre skilt av tabellceller eller formatering fanges. I en
+ *     CSV-datafil slås sifre sammen på samme måte, også over komma og tomme
+ *     celler, men ikke over en celle som ikke kan holde en del av et nummer:
+ *     en celle i en post med minst to celler som (uten blanke rundt) er
  *       - et desimaltall med færre enn 11 sifre og en brøkdel som ikke bare
  *         er nuller (`1.2`, `-3.5`, `"1,2"` i anførselstegn), eller
  *       - en ISO-dato `YYYY-MM-DD` med gyldig måned og dag, eventuelt fulgt
@@ -125,9 +125,10 @@
  *     Et tall med bare nuller i brøkdelen (`12345.0`, `345.00`) skannes som
  *     det er, nullene med. Alt annet skannes som
  *     i en side: tomme celler, `-`, tekst, celler i anførselstegn og over
- *     flere linjer, HTML i celler, linjenummer, og NAVident og e-post. En CSV der en celle uten anførselstegn, i hvilken
- *     som helst rad, har semikolon eller tabulator, en CSV som ikke kan leses, og .sql og
- *     .yaml skannes som en side. Bare e-post og NAVident kan slippes med
+ *     flere linjer, HTML i celler, linjenummer, og NAVident og e-post. En CSV
+ *     der en celle uten anførselstegn, i hvilken som helst rad, har semikolon
+ *     eller tabulator, en CSV som ikke kan leses, og .sql og .yaml skannes som
+ *     en side. Bare e-post og NAVident kan slippes med
  *     `--tillat-ident`; et fødselsnummer har ingen overstyring.
  *   - culled: `signal: none` i frontmatter eller
  *     `<meta name="wiki-signal" content="none">`.
