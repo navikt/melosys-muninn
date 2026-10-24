@@ -299,14 +299,15 @@ const SKILLEREKKE = /(?:\s|\||<[^<>]{0,200}>)+/g;
  * Et fødselsnummer har tosifret år, så en dato med behandlings-ID i neste
  * celle blir ikke et; et år utenfor 19xx–20xx (`15.03.8550 060`) kan være ÅÅ
  * og starten på personnummeret og skannes som før. Et fødselsnummer med ÅÅ 19
- * eller 20 skrevet `DD.MM.ÅÅNN NNN` fanges ikke.
+ * eller 20 skrevet `DD.MM.ÅÅNN` + noe annet enn et siffer + resten fanges
+ * ikke, med `.`, `/` eller `-` som skilletegn (`15.03.20NN NNN`).
  */
 const DATO_FIRESIFRET_ÅR = /(?<!\d)(?:0?[1-9]|[12]\d|3[01])([./-])(?:0?[1-9]|1[0-2])\1(?:19|20)\d\d(?!\d)/g;
 
 /**
  * 11-sifrede kandidater fra linjens sifre alene. Hver rekke av blanke, `|` og
- * HTML-tagger telles først som ett tegn, og en dato med firesifret år skiller
- * som en bokstav. Sifergrupper skilt av høyst
+ * HTML-tagger telles først som ett tegn, og en DATO_FIRESIFRET_ÅR skiller som
+ * en bokstav. Sifergrupper skilt av høyst
  * MAKS_MELLOMROM_PROJEKSJON tegn uten bokstaver slås så sammen, og hver
  * sammenhengende rekke grupper som til sammen har nøyaktig 11 sifre, blir en
  * kandidat. Det dekker `15038512345`, `150385 12345`, `150385.12345`,

@@ -140,6 +140,15 @@ describe("dato med firesifret år blir ikke del av et fødselsnummer", () => {
     expect(id).not.toBe("");
     expect(skannTekst(`| MEL-1 | 2025 | ${dato} | ${id} | NAV og Skatt |  |`)).toEqual([]);
   });
+  test("år 19xx gjelder også", () => {
+    let id1999 = "";
+    for (let n = 0; n < 1000 && !id1999; n++) {
+      const s = String(n).padStart(3, "0");
+      if (klassifiser11(`01021999${s}`)) id1999 = s;
+    }
+    expect(id1999).not.toBe("");
+    expect(skannTekst(`| MEL-1 | 01.02.1999 | ${id1999} |`)).toEqual([]);
+  });
   test("datoen skiller to halvdeler som en bokstav", () => {
     expect(skannTekst(`| ${DATO} | 01.02.2026 | ${PERS} |`)).toEqual([]);
   });
