@@ -129,44 +129,34 @@ describe("NAVident og duplikater", () => {
   });
 });
 
-describe("organisasjonsnummer", () => {
-  test("foretaksnummer som stikkord", () => {
-    expect(typer(`Foretaksnummer ${ORGNR}`)).toEqual(["organisasjonsnummer"]);
+describe("dato med firesifret år blir ikke del av et fødselsnummer", () => {
+  // `| 23.10.2026 | 950 |` i saksregisteret ga 23102026950, som har gyldige kontrollsifre.
+  let id = "";
+  for (let n = 0; n < 1000 && !id; n++) {
+    const s = String(n).padStart(3, "0");
+    if (klassifiser11(`23102026${s}`)) id = s;
+  }
+  test("dato + behandlings-ID i neste celle", () => {
+    expect(id).not.toBe("");
+    expect(skannTekst(`| MEL-1 | 2025 | 23.10.2026 | ${id} | NAV og Skatt |  |`)).toEqual([]);
   });
-  test("HTML-celle", () => {
-    expect(typer(`<td>${ORGNR}</td>`)).toEqual(["organisasjonsnummer"]);
+  test("samme sifre med tosifret år fanges fortsatt", () => {
+    expect(typer(`| 231020 | 26${id} |`)).toEqual(["fødselsnummer"]);
   });
-  test("YAML-liste", () => {
-    expect(typer(`  - ${ORGNR}`)).toEqual(["organisasjonsnummer"]);
-  });
-  test("YAML-nøkkel med norsk bokstav", () => {
-    expect(typer(`  arbeidsgiverNær: ${ORGNR}`)).toEqual(["organisasjonsnummer"]);
-  });
-  test("punktum- og mellomromsgrupper", () => {
-    const [a, b, c] = [ORGNR.slice(0, 3), ORGNR.slice(3, 6), ORGNR.slice(6)];
-    expect(typer(`orgnr ${a}.${b}.${c}`)).toEqual(["organisasjonsnummer"]);
-    expect(typer(`orgnr ${a}\u00a0${b}\u00a0${c}`)).toEqual(["organisasjonsnummer"]);
-    expect(typer(`orgnr ${a}\t${b}\t${c}`)).toEqual(["organisasjonsnummer"]);
-  });
-  test("et ```-gjerde inne i en ````-blokk snur ikke tilstanden", () => {
-    const tekst = ["````", "```", "````", `Det kom ${ORGNR} brev.`].join("\n");
-    expect(typer(tekst)).toEqual([]);
-  });
-  test("et lukkegjerde med info-streng lukker ikke blokken", () => {
-    const tekst = ["```", "```js", `Det kom ${ORGNR} brev.`, "```"].join("\n");
-    expect(skannTekst(tekst).map((f) => f.linje)).toEqual([3]);
-  });
-  test("``` med backtick i info-strengen åpner ingen blokk", () => {
-    const tekst = ["```x`y", `Det kom ${ORGNR} brev.`].join("\n");
-    expect(typer(tekst)).toEqual([]);
-  });
-  test("org-stikkord med mellomrom og bindestrek virker fortsatt", () => {
-    expect(typer(`org   -  nr ${ORGNR}`)).toEqual(["organisasjonsnummer"]);
-    expect(typer(`virksomhets - nummer ${ORGNR}`)).toEqual(["organisasjonsnummer"]);
-  });
-  test("~~~ lukker ikke en ```-blokk", () => {
-    const tekst = ["```", "~~~", `${ORGNR}`, "```"].join("\n");
-    expect(skannTekst(tekst).map((f) => f.linje)).toEqual([3]);
+});
+
+describe("organisasjonsnummer er offentlig og skannes ikke", () => {
+  const [a, b, c] = [ORGNR.slice(0, 3), ORGNR.slice(3, 6), ORGNR.slice(6)];
+  test.each([
+    ["stikkord", `Foretaksnummer ${ORGNR}`],
+    ["nøkkel-verdi", `orgnr: ${ORGNR}`],
+    ["tabellrad", `| Firma | ${ORGNR} |`],
+    ["HTML-celle", `<td>${ORGNR}</td>`],
+    ["YAML-liste", `  - ${ORGNR}`],
+    ["punktumgrupper", `orgnr ${a}.${b}.${c}`],
+    ["kodeblokk", ["```", ORGNR, "```"].join("\n")],
+  ])("%s", (_navn, tekst) => {
+    expect(skannTekst(tekst)).toEqual([]);
   });
 });
 
@@ -177,15 +167,6 @@ describe("e-post er lineær", () => {
     expect(skannTekst(linje)).toEqual([]);
     expect(performance.now() - t0).toBeLessThan(1000);
     expect(typer("skriv til ola.nordmann@example.no i dag")).toEqual(["e-post"]);
-  });
-});
-
-describe("stikkordene for organisasjonsnummer er lineære", () => {
-  test.each([["org"], ["virksomhets"], ["foretaks.-"]])("%s + 1 MB mellomrom skannes på under ett sekund", (start) => {
-    const linje = start + " ".repeat(1024 * 1024);
-    const t0 = performance.now();
-    expect(skannTekst(linje)).toEqual([]);
-    expect(performance.now() - t0).toBeLessThan(1000);
   });
 });
 

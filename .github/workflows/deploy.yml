@@ -679,12 +679,12 @@ jobs:
       # constraints. muninn refuses (503) every answer with a non-blank body
       # when the module does not load or export scanAnswer, so a broken overlay
       # would deploy green and show up only as answers that cannot be saved. Both numbers are
-      # SYNTHETIC, built from their check digits here. Probing both kinds
-      # catches an adapter that refuses only one of them. The leak check fails
-      # the step only when a reason contains a number's first six digits as
-      # one run; a reason that leaks only later digits, or the first six with
-      # spaces between them, passes it.
-      - name: The answer scanner loads and refuses a fødselsnummer and an organisasjonsnummer
+      # SYNTHETIC, built from their check digits here. An organisasjonsnummer
+      # is public and must pass, even after a keyword. The leak check fails
+      # the step only when a reason contains the fødselsnummer's first six
+      # digits as one run; a reason that leaks only later digits, or the first
+      # six with spaces between them, passes it.
+      - name: The answer scanner loads, refuses a fødselsnummer and passes an organisasjonsnummer
         env:
           IMG: ${{ steps.docker-push.outputs.image }}
         run: |
@@ -704,17 +704,17 @@ jobs:
               if (k1 !== 10 && k2 !== 10) fnr = d.join("") + k1 + k2;
             }
             const ren = scanAnswer("Ja, det stemmer.\nZ990001 kan svare.");
-            const avvistOrg = scanAnswer("orgnr: " + orgnr);
+            const slipperOrg = scanAnswer("orgnr: " + orgnr);
             const avvistFnr = scanAnswer("Saken gjelder " + fnr + " i dag.");
-            console.log(JSON.stringify({ ren, avvistOrg, avvistFnr }));
-            const grunner = [...avvistOrg, ...avvistFnr].map((a) => String(a?.reason));
-            const lekker = grunner.some((g) => g.includes(orgnr.slice(0, 6)) || g.includes(fnr.slice(0, 6)));
+            console.log(JSON.stringify({ ren, slipperOrg, avvistFnr }));
+            const grunner = avvistFnr.map((a) => String(a?.reason));
+            const lekker = grunner.some((g) => g.includes(fnr.slice(0, 6)));
             const ok = Array.isArray(ren) && ren.length === 0
-              && Array.isArray(avvistOrg) && avvistOrg.length === 1 && grunner[0].includes("organisasjonsnummer")
-              && Array.isArray(avvistFnr) && avvistFnr.length === 1 && grunner[1].includes("fødselsnummer")
+              && Array.isArray(slipperOrg) && slipperOrg.length === 0
+              && Array.isArray(avvistFnr) && avvistFnr.length === 1 && grunner[0].includes("fødselsnummer")
               && !lekker;
             process.exit(ok ? 0 : 1);
-          ' || { echo "::error::/app/nais-skanner/build/svar-skanner.ts did not load, or did not pass clean text and refuse both a fødselsnummer and an organisasjonsnummer with the number masked"; exit 1; }
+          ' || { echo "::error::/app/nais-skanner/build/svar-skanner.ts did not load, did not pass clean text and an organisasjonsnummer, or did not refuse a fødselsnummer with the number masked"; exit 1; }
 
       # The ENTRYPOINT itself, in the pushed artifact: with no reachable
       # database it must refuse with require-provisioned's "could not ask"

@@ -3,9 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  erDatakontekst,
   gyldigKontrollsiffer11,
-  gyldigOrgnr,
   harSignalNone,
   klassifiser11,
   masker,
@@ -75,10 +73,6 @@ describe("kontrollsiffer og dato", () => {
     expect(klassifiser11(lagNummer("311385"))).toBeNull(); // måned 13
     expect(klassifiser11(lagNummer("310485"))).toBeNull(); // 31. april
   });
-  test("organisasjonsnummer med riktig og feil kontrollsiffer", () => {
-    expect(gyldigOrgnr(ORGNR)).toBe(true);
-    expect(gyldigOrgnr(ødelagtKontroll(ORGNR))).toBe(false);
-  });
 });
 
 describe("skannTekst", () => {
@@ -103,33 +97,8 @@ describe("skannTekst", () => {
     expect(skannTekst(`1${FNR}2`)).toEqual([]);
   });
 
-  describe("organisasjonsnummer — bare i datalignende kontekst", () => {
-    test("i løpende tekst uten stikkord: ikke flagget", () => {
-      expect(skannTekst(`Det kom ${ORGNR} brev i fjor.`)).toEqual([]);
-    });
-    test("med stikkord på linjen: flagget", () => {
-      const funn = skannTekst(`Arbeidsgiver har orgnr ${ORGNR}.`);
-      expect(funn.map((f) => f.type)).toEqual(["organisasjonsnummer"]);
-      expect(funn[0]!.maskert).toBe("*******" + ORGNR.slice(-2));
-    });
-    test("i en tabellrad: flagget", () => {
-      expect(skannTekst(`| Firma | ${ORGNR} |`).map((f) => f.type)).toEqual(["organisasjonsnummer"]);
-    });
-    test("i en kodeblokk: flagget", () => {
-      const tekst = ["```", `${ORGNR}`, "```", `${ORGNR} utenfor`].join("\n");
-      expect(skannTekst(tekst).map((f) => f.linje)).toEqual([2]);
-    });
-    test("på en JSON-lignende linje: flagget", () => {
-      expect(skannTekst(`  "arbeidsgiver": "${ORGNR}",`)).toHaveLength(1);
-    });
-    test("feil kontrollsiffer i datakontekst: ikke flagget", () => {
-      expect(skannTekst(`orgnr ${ødelagtKontroll(ORGNR)}`)).toEqual([]);
-    });
-    test("erDatakontekst direkte", () => {
-      expect(erDatakontekst("Organisasjonsnummer: 1", false)).toBe(true);
-      expect(erDatakontekst("vanlig tekst", false)).toBe(false);
-      expect(erDatakontekst("vanlig tekst", true)).toBe(true);
-    });
+  test("organisasjonsnummer gir ingen funn, heller ikke med stikkord", () => {
+    expect(skannTekst(`Arbeidsgiver har orgnr ${ORGNR}.`)).toEqual([]);
   });
 
   // Z99xxxx er testidentområdet, ikke en ekte saksbehandler.
