@@ -118,8 +118,8 @@ describe("rate av fødselsnummerfunn i tilfeldige datarader", () => {
       let nå = 0;
       for (let i = 0; i < N; i++) {
         const csv = `a,b,c,d\n${rad()}\n`;
-        if (skannTekst(csv).some((f) => f.type !== "organisasjonsnummer")) main++;
-        if (skannCsv(csv).some((f) => f.type !== "organisasjonsnummer")) nå++;
+        if (skannTekst(csv).length > 0) main++;
+        if (skannCsv(csv).length > 0) nå++;
       }
       expect(main).toBeGreaterThan(0);
       expect(nå).toBe(forventet === "lik" ? main : 0);

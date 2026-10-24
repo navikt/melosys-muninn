@@ -103,19 +103,20 @@
  *     annet antall kolonner enn overskriften, når det blir ingen kolonner igjen, og
  *     når kopien blir større enn 1 MB. Uten `--tillat-ident` avvises en NAVident
  *     i en .sql eller .yaml og en e-postadresse i alle datafiler. Et
- *     fødselsnummer, D-nummer, H-nummer eller organisasjonsnummer avvises i
- *     alle datafiler, før noen kolonne fjernes, også med flagget.
+ *     fødselsnummer, D-nummer eller H-nummer avvises i alle datafiler, før
+ *     noen kolonne fjernes, også med flagget.
  *   - størrelse: over 2 MB for en side, 1 MB for en datafil, hopper speilet
  *     over objektet, så det avvises her.
  *   - koding: UTF-16 og UTF-32 (merke eller NUL-byte) avvises.
  *   - innhold og filnavn: fødselsnummer, D-nummer og H-nummer (kontrollsifre +
- *     dato), organisasjonsnummer (kontrollsiffer i datalignende kontekst),
- *     e-postadresser og NAVident. Teksten normaliseres først (NFKC, HTML-
- *     entiteter, usynlige tegn), så også sifre skilt av tabellceller eller
- *     formatering fanges. I en CSV-datafil slås sifre sammen på samme måte,
- *     også over komma og tomme celler, men ikke over en celle som ikke kan
- *     holde en del av et nummer: en celle i en post med minst to celler som
- *     (uten blanke rundt) er
+ *     dato; en dato med år 19xx–20xx, `23.10.2026`, blir ikke del av et slikt
+ *     nummer, se DATO_FIRESIFRET_ÅR), e-postadresser og NAVident. Et
+ *     organisasjonsnummer er offentlig (Enhetsregisteret) og skannes ikke.
+ *     Teksten normaliseres først (NFKC, HTML-entiteter, usynlige tegn), så
+ *     også sifre skilt av tabellceller eller formatering fanges. I en
+ *     CSV-datafil slås sifre sammen på samme måte, også over komma og tomme
+ *     celler, men ikke over en celle som ikke kan holde en del av et nummer:
+ *     en celle i en post med minst to celler som (uten blanke rundt) er
  *       - et desimaltall med færre enn 11 sifre og en brøkdel som ikke bare
  *         er nuller (`1.2`, `-3.5`, `"1,2"` i anførselstegn), eller
  *       - en ISO-dato `YYYY-MM-DD` med gyldig måned og dag, eventuelt fulgt
@@ -124,10 +125,10 @@
  *     Et tall med bare nuller i brøkdelen (`12345.0`, `345.00`) skannes som
  *     det er, nullene med. Alt annet skannes som
  *     i en side: tomme celler, `-`, tekst, celler i anførselstegn og over
- *     flere linjer, HTML i celler, linjenummer, og NAVident, e-post og
- *     organisasjonsnummer. En CSV der en celle uten anførselstegn, i hvilken
- *     som helst rad, har semikolon eller tabulator, en CSV som ikke kan leses, og .sql og
- *     .yaml skannes som en side. Bare e-post og NAVident kan slippes med
+ *     flere linjer, HTML i celler, linjenummer, og NAVident og e-post. En CSV
+ *     der en celle uten anførselstegn, i hvilken som helst rad, har semikolon
+ *     eller tabulator, en CSV som ikke kan leses, og .sql og .yaml skannes som
+ *     en side. Bare e-post og NAVident kan slippes med
  *     `--tillat-ident`; et fødselsnummer har ingen overstyring.
  *   - culled: `signal: none` i frontmatter eller
  *     `<meta name="wiki-signal" content="none">`.
@@ -168,7 +169,7 @@ export const EXIT_BRUK = 2;
 export const EXIT_FEILET = 3;
 
 export type FnrType = "fødselsnummer" | "D-nummer" | "H-nummer";
-export type FunnType = FnrType | "organisasjonsnummer" | "e-post" | "NAVident";
+export type FunnType = FnrType | "e-post" | "NAVident";
 
 export interface Funn {
   /** Første linje verdien står på. */
@@ -284,44 +285,8 @@ export function klassifiser11(nr: string): FnrType | null {
   return type;
 }
 
-const ORG_VEKTER = [3, 2, 7, 6, 5, 4, 3, 2];
-
-/** Kontrollsifferet i et 9-sifret organisasjonsnummer stemmer (starter på 8 eller 9). */
-export function gyldigOrgnr(nr: string): boolean {
-  if (!/^[89]\d{8}$/.test(nr)) return false;
-  const d = [...nr].map(Number);
-  const k = mod11(d, ORG_VEKTER);
-  return k !== null && k === d[8];
-}
-
-// `\s*(?:-\s*)?`, ikke `\s*-?\s*`: to `\s*` etter hverandre gir kvadratisk
-// tilbakesporing på en lang rekke mellomrom (målt 2,3 s på 64k).
-const ORG_ORD = /org(?:anisasjons)?\.?\s*(?:-\s*)?(?:nr|nummer)|orgnr|\borgnum|(?:virksomhets|foretaks|enhets)\.?\s*(?:-\s*)?(?:nr|nummer)/i;
-
-/**
- * Når et gyldig 9-sifret tall regnes som et organisasjonsnummer. Et tall med
- * riktig kontrollsiffer alene er for vanlig (omtrent hvert ellevte tall), så
- * det kreves i tillegg ett av:
- *   - et stikkord (orgnr, organisasjons-, virksomhets-, foretaks-, enhetsnummer),
- *   - en tabellrad (`|` først) eller en HTML-celle (`<td>`/`<th>`),
- *   - en linje inne i en kodeblokk,
- *   - en JSON-, YAML- eller nøkkel-verdi-linje (`"felt": …`, `felt: …`, `- 9…`).
- */
-export function erDatakontekst(linje: string, iKodeblokk: boolean): boolean {
-  if (iKodeblokk) return true;
-  if (ORG_ORD.test(linje)) return true;
-  const t = linje.trim();
-  if (t.startsWith("|")) return true;
-  if (/<t[dh][\s>]/i.test(t)) return true;
-  if (/["'][^"']*["']\s*:/.test(t)) return true;
-  if (/^["']?[\p{L}_][\p{L}\p{N}_.-]*["']?\s*[:=]\s*["']?\d/u.test(t)) return true;
-  if (/^-\s+["']?\d/.test(t)) return true;
-  return false;
-}
-
 // ── Skanner ──────────────────────────────────────────────────────
 
-const RE_9 = /(?<!\d)(\d{3})[ .]?(\d{3})[ .]?(\d{3})(?!\d)/g;
 /** Stor bokstav + 6 sifre. En git-SHA er små bokstaver og treffer ikke. */
 const RE_NAVIDENT = /(?<![A-Za-z0-9])[A-Z]\d{6}(?![A-Za-z0-9])/g;
 /** Tegn mellom sifergrupper som projeksjonen slår sammen over. */
@@ -330,8 +295,19 @@ const MAKS_MELLOMROM_PROJEKSJON = 5;
 const SKILLEREKKE = /(?:\s|\||<[^<>]{0,200}>)+/g;
 
 /**
+ * En dato med år 19xx eller 20xx (`23.10.2026`, `23/10/2026`, `23-10-2026`).
+ * Et fødselsnummer har tosifret år, så en dato med behandlings-ID i neste
+ * celle blir ikke et; et år utenfor 19xx–20xx (`15.03.8550 060`) kan være ÅÅ
+ * og starten på personnummeret og skannes som før. Et fødselsnummer med ÅÅ 19
+ * eller 20 skrevet `DD.MM.ÅÅNN` + noe annet enn et siffer + resten fanges
+ * ikke, med `.`, `/` eller `-` som skilletegn (`15.03.20NN NNN`).
+ */
+const DATO_FIRESIFRET_ÅR = /(?<!\d)(?:0?[1-9]|[12]\d|3[01])([./-])(?:0?[1-9]|1[0-2])\1(?:19|20)\d\d(?!\d)/g;
+
+/**
  * 11-sifrede kandidater fra linjens sifre alene. Hver rekke av blanke, `|` og
- * HTML-tagger telles først som ett tegn. Sifergrupper skilt av høyst
+ * HTML-tagger telles først som ett tegn, og en DATO_FIRESIFRET_ÅR skiller som
+ * en bokstav. Sifergrupper skilt av høyst
  * MAKS_MELLOMROM_PROJEKSJON tegn uten bokstaver slås så sammen, og hver
  * sammenhengende rekke grupper som til sammen har nøyaktig 11 sifre, blir en
  * kandidat. Det dekker `15038512345`, `150385 12345`, `150385.12345`,
@@ -339,7 +315,7 @@ const SKILLEREKKE = /(?:\s|\||<[^<>]{0,200}>)+/g;
  * `**150385**12345` og `<td>…</td><td>…</td>`, men ikke `150385 og 12345`.
  */
 export function sifferkandidater(linje: string): string[] {
-  const uten = linje.replace(SKILLEREKKE, " ");
+  const uten = linje.replace(SKILLEREKKE, " ").replace(DATO_FIRESIFRET_ÅR, "x");
   const ut: string[] = [];
   let gruppe: string[] = [];
   let forrigeSlutt = -1;
@@ -399,13 +375,6 @@ function erCellelinje(linje: string): boolean {
   return /<[^<>]{0,200}>/.test(linje) && /\d/.test(linje) && /^[\d\s|.-]*$/.test(linje.replace(/<[^<>]{0,200}>/g, ""));
 }
 
-/** Kodeblokk-gjerde: tegn og lengde, så ``` inne i en ````-blokk ikke lukker den. */
-function gjerde(linje: string): { tegn: string; lengde: number; resten: string } | null {
-  const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(linje);
-  if (!m) return null;
-  return { tegn: m[1]![0]!, lengde: m[1]!.length, resten: m[2]! };
-}
-
 /**
  * Skanner tekst linje for linje. Samme type + verdi rapporteres én gang, med antall.
  * `sifferTekst` (fra `csvSifferTekst`): samme tekst med cellene som ikke kan
@@ -421,7 +390,6 @@ export function skannTekst(tekst: string, sifferTekst?: string): Funn[] {
     if (f) f.antall++;
     else funn.set(nøkkel, { linje, type, maskert: masker(verdi), ident, antall: 1 });
   };
-  let åpen: { tegn: string; lengde: number } | null = null;
   const linjer = tekst.split(/\r?\n/);
   const sifferLinjer = sifferTekst?.split(/\r?\n/);
   const sifre = sifferLinjer?.length === linjer.length ? sifferLinjer : linjer;
@@ -440,15 +408,8 @@ export function skannTekst(tekst: string, sifferTekst?: string): Funn[] {
     celler = null;
   };
   for (let i = 0; i < linjer.length; i++) {
-    const rå = linjer[i]!;
     const nr = i + 1;
-    // Gjerdelinjen skannes selv også (info-strengen kan bære et nummer).
-    const varÅpen = åpen !== null;
-    const g = gjerde(rå);
-    if (g && !åpen && !(g.tegn === "`" && g.resten.includes("`"))) åpen = g;
-    else if (g && åpen && g.tegn === åpen.tegn && g.lengde >= åpen.lengde && g.resten.trim() === "") åpen = null;
-    const iKodeblokk = varÅpen && åpen !== null;
-    const linje = normaliserLinje(rå);
+    const linje = normaliserLinje(linjer[i]!);
     const sifferlinje = sifre === linjer ? linje : normaliserLinje(sifre[i]!);
     const enkelt = new Set(sifferkandidater(sifferlinje));
     for (const tall of enkelt) {
@@ -460,11 +421,6 @@ export function skannTekst(tekst: string, sifferTekst?: string): Funn[] {
       celler.tekst.push(sifferlinje);
       for (const t of enkelt) celler.enkelt.add(t);
     } else tømCeller();
-    if (erDatakontekst(linje, iKodeblokk)) {
-      const ni = new Set<string>();
-      for (const m of linje.matchAll(RE_9)) ni.add(m[1]! + m[2]! + m[3]!);
-      for (const tall of ni) if (gyldigOrgnr(tall)) legg(nr, "organisasjonsnummer", tall, false);
-    }
     for (const e of finnEpost(linje)) legg(nr, "e-post", e, true);
     for (const m of linje.matchAll(RE_NAVIDENT)) legg(nr, "NAVident", m[0], true);
   }
@@ -980,7 +936,7 @@ export interface Vurdering {
 /**
  * UTF-16 eller UTF-32 (byte-rekkefølgemerke eller NUL-byte), eller null. En
  * slik fil dekodet som UTF-8 har en NUL mellom hvert tegn, og da treffer
- * verken e-post, NAVident eller stikkordene for organisasjonsnummer.
+ * verken e-post eller NAVident.
  */
 function ikkeUtf8(b: Uint8Array): string | null {
   if (b.length >= 4 && b[0] === 0 && b[1] === 0 && b[2] === 0xfe && b[3] === 0xff) return "filen er UTF-32";

@@ -55,10 +55,6 @@ describe("scanAnswer avviser", () => {
     expect(svar).toEqual([{ reason: `linje 2: ${type} *********${nr.slice(-2)}` }]);
   });
 
-  test("organisasjonsnummer på en nøkkel-verdi-linje", () => {
-    expect(scanAnswer(`Arbeidsgiver er oppgitt.\norgnr: ${ORGNR}`)).toEqual([{ reason: `linje 2: organisasjonsnummer *******${ORGNR.slice(-2)}` }]);
-  });
-
   test("samme nummer flere ganger gir ett avslag med antall", () => {
     expect(scanAnswer(`${FNR}\nog igjen ${FNR}`)).toEqual([{ reason: `linje 1: fødselsnummer *********${FNR.slice(-2)} (2 forekomster)` }]);
   });
@@ -68,10 +64,10 @@ describe("scanAnswer avviser", () => {
   });
 
   test("grunnen inneholder aldri hele nummeret", () => {
-    const alle = [FNR, mellomrom(FNR), punktum(FNR), fullbredde(FNR), DNR, HNR, `orgnr: ${ORGNR}`].join("\n");
+    const alle = [FNR, mellomrom(FNR), punktum(FNR), fullbredde(FNR), DNR, HNR].join("\n");
     const grunner = scanAnswer(alle).map((a) => a.reason).join("\n");
     expect(grunner).not.toBe("");
-    for (const nr of [FNR, DNR, HNR, ORGNR]) {
+    for (const nr of [FNR, DNR, HNR]) {
       expect(grunner).not.toContain(nr);
       expect(grunner).not.toContain(nr.slice(0, 6));
     }
@@ -89,11 +85,11 @@ describe("scanAnswer slipper gjennom", () => {
   });
 });
 
-// Dokumentert i svar-skanner.ts og README: et organisasjonsnummer avvises bare
-// i datakontekst (erDatakontekst i publiseringsskriptet), ikke i vanlig tekst.
-test("et organisasjonsnummer i vanlig tekst slipper gjennom", () => {
+// Et organisasjonsnummer er offentlig og slipper gjennom, også med stikkord.
+test("et organisasjonsnummer slipper gjennom", () => {
   expect(ORGNR).toBe("912345688");
   expect(scanAnswer(`Arbeidsgiveren ${ORGNR} er feil`)).toEqual([]);
+  expect(scanAnswer(`orgnr: ${ORGNR}`)).toEqual([]);
 });
 
 test("resultatet er en vanlig liste av { reason }-objekter", () => {
