@@ -1322,6 +1322,8 @@ interface Kjøring {
   navngitt: Set<string>;
   /** Hver side med stiene til datafilene den viser som ikke finnes lokalt. */
   manglerTil: Map<Vurdering, string[]>;
+  /** HTML-fila (NFC) til hver diagramfil sidene viser, også de som ikke finnes. */
+  diagramHtmlFiler: Set<string>;
   /** Avviser en datafil når alle sidene som viser den, er avvist. Kjøres etter hver sjekk som kan avvise en side. */
   avvisDatafilerUtenSide: () => void;
 }
@@ -1451,7 +1453,15 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
     }
   };
   avvisDatafilerUtenSide();
-  return { vurderinger, sideneTil, datafilerTil, navngitt: new Set([...visesAv.keys()].map((r) => r.normalize("NFC"))), manglerTil, avvisDatafilerUtenSide };
+  return {
+    vurderinger,
+    sideneTil,
+    datafilerTil,
+    navngitt: new Set([...visesAv.keys()].map((r) => r.normalize("NFC"))),
+    manglerTil,
+    diagramHtmlFiler: new Set([...htmlTil.values()].map((r) => r.normalize("NFC"))),
+    avvisDatafilerUtenSide,
+  };
 }
 
 /** Avviser hver godkjent fil som kolliderer med et annet levende objekt i bøtta under små bokstaver + NFC. */
@@ -1725,9 +1735,25 @@ function lagStatus(bucket: string, rot: string, tillatIdent: boolean, o: Omgivel
     return true;
   };
 
+  const uten = objekter
+    .map((x) => x.navn)
+    .filter((n) => datatype(n) !== null && !k.navngitt.has(n.normalize("NFC")))
+    .sort();
+  // HTML-fila til et diagram en lest side viser, hører til den siden og får
+  // ingen egen rad. HTML-fila ved en diagramfil ingen lest side viser, er
+  // like foreldreløs som diagramfila.
+  const utenSett = new Set(uten);
+  const foreldreløsHtml = objekter
+    .map((x) => x.navn)
+    .filter((n) => endelse(n) === ".html" && !k.diagramHtmlFiler.has(n.normalize("NFC")))
+    .filter((n) => DIAGRAM_ENDELSER.some((e) => utenSett.has(n.slice(0, -".html".length) + e)));
+  const tilhørerSide = (objekt: string) => k.diagramHtmlFiler.has(objekt.normalize("NFC")) || foreldreløsHtml.includes(objekt);
+  for (let i = sider.length - 1; i >= 0; i--) if (tilhørerSide(sider[i]!.objekt)) sider.splice(i, 1);
+
   const endredeObjekter: string[] = [];
   const bareSlettet: StatusResultat["bareSlettet"] = [];
   for (const { objekt, lokal } of lokale) {
+    if (tilhørerSide(objekt)) continue;
     const side = k.vurderinger.find((v) => v.rel === lokal);
     const s: SideStatus & { objekt: string } = { objekt, relPath: visningsnavn(objekt), tilstand: "uendret", endredeFiler: [], avslag: [], advarsler: [] };
     sider.push(s);
@@ -1765,11 +1791,7 @@ function lagStatus(bucket: string, rot: string, tillatIdent: boolean, o: Omgivel
   const ikkeUendret = sider.filter((s) => s.tilstand !== "uendret" && kanViseData(s.objekt)).length;
   sider.sort((a, b) => (a.objekt < b.objekt ? -1 : a.objekt > b.objekt ? 1 : 0));
 
-  const uten = objekter
-    .map((x) => x.navn)
-    .filter((n) => datatype(n) !== null && !k.navngitt.has(n.normalize("NFC")))
-    .sort();
-  const maskert = uten.map((n) => visningsnavn(n));
+  const maskert = [...uten, ...foreldreløsHtml].sort().map((n) => visningsnavn(n));
   return {
     status: {
       bøtte: bucket,

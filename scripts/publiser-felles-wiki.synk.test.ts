@@ -751,11 +751,37 @@ describe("diagrammer i --status og --synk", () => {
     expect(side(json().data, "plans/f.mdx")).toMatchObject({ tilstand: "endret", endredeFiler: ["plans/flyt.workflow.json"] });
   });
 
-  test("en endret HTML-fil gjør siden endret, og HTML-fila selv", () => {
+  test("en endret HTML-fil gjør siden endret; HTML-fila får ingen egen rad", () => {
     bøtte(publisert({ "plans/flyt.html": "<svg>ny</svg>\n" }));
     const { data } = json();
     expect(side(data, "plans/f.mdx")).toMatchObject({ tilstand: "endret", endredeFiler: ["plans/flyt.html"] });
-    expect(side(data, "plans/flyt.html")!.tilstand).toBe("endret");
+    expect(data.sider.map((s) => s.relPath)).toEqual(["plans/f.mdx"]);
+    expect(kjør(["--status", rot]).ut).toContain("0 uendret, 1 endret, 0 avvist, 0 mangler lokalt");
+  });
+
+  test("en NAVident i HTML-fila avviser siden én gang", () => {
+    bøtte(publisert({ "plans/flyt.html": "<svg><text>Z990123</text></svg>\n" }));
+    const r = kjør(["--status", rot]);
+    expect(r.ut).toMatch(/AVVIST +plans\/f\.mdx/);
+    expect(r.ut).toContain("0 uendret, 0 endret, 1 avvist, 0 mangler lokalt");
+  });
+
+  test("en HTML-fil slettet lokalt, men i bøtta, gjør siden endret og står ikke som mangler lokalt", () => {
+    const filer = publisert();
+    rmSync(path.join(rot, "plans/flyt.html"));
+    bøtte(filer);
+    const r = kjør(["--status", rot]);
+    expect(r.ut).toMatch(/ENDRET +plans\/f\.mdx/);
+    expect(r.ut).toContain("plans/flyt.html: finnes ikke lokalt, men ligger fortsatt i bøtta");
+    expect(r.ut).toContain("0 uendret, 1 endret, 0 avvist, 0 mangler lokalt");
+  });
+
+  test("viser ingen side diagrammet lenger, er både diagramfila og HTML-fila foreldreløse", () => {
+    const filer = publisert({ "plans/f.mdx": "# Flyt\n" });
+    bøtte({ ...filer, "plans/f.mdx": "# Flyt\n" });
+    const { data } = json();
+    expect(data.sider.map((s) => s.relPath)).toEqual(["plans/f.mdx"]);
+    expect(data.foreldreløse).toEqual(["plans/flyt.html", "plans/flyt.workflow.json"]);
   });
 
   test("en HTML-fil som ikke er i bøtta ennå, gjør siden endret", () => {
@@ -780,11 +806,12 @@ describe("diagrammer i --status og --synk", () => {
     expect(r.ut).toContain("uendret i bøtta, lastes ikke opp: plans/flyt.html");
   });
 
-  test("--synk laster opp en endret HTML-fil én gang", () => {
+  test("--synk laster opp en endret HTML-fil én gang, med siden, og gir den ingen egen adresse", () => {
     bøtte(publisert({ "plans/flyt.html": "<svg>ny</svg>\n" }));
     const r = kjør(["--synk", rot]);
     expect(r.kode).toBe(0);
-    expect(destinasjoner().filter((d) => d!.endsWith("flyt.html"))).toHaveLength(1);
-    expect(destinasjoner()).not.toContain("gs://felles-test/plans/flyt.workflow.json");
+    expect(destinasjoner()).toEqual(["gs://felles-test/plans/f.mdx", "gs://felles-test/plans/flyt.html"]);
+    expect(r.ut).toContain("Synker 1 endret(e) side(r)");
+    expect(r.ut).not.toContain("relPath=plans%2Fflyt.html");
   });
 });
