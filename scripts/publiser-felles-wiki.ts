@@ -33,6 +33,10 @@
  *   - `mangler-lokalt`: siden ligger i bøtta, men ikke under wiki-roten med
  *     nøyaktig samme navn (store og små bokstaver teller, også der filsystemet
  *     ikke skiller dem; navnene sammenlignes i NFC).
+ * HTML-fila til et diagram en lest side viser, er en datafil for siden og får
+ * ingen egen rad: en endring, et avslag eller en sletting av den står på
+ * sidens rad. HTML-fila ved en diagramfil som er foreldreløs (under), listes
+ * som foreldreløs sammen med den.
  * En datafil i bøtta er sikkert foreldreløs når ingen lest side viser den og
  * hver fulgt .md- og .mdx-side er `uendret`: da er sidens lokale referanser
  * nøyaktig de bøtteversjonen har. Er en slik side `endret`, `avvist` eller
@@ -63,7 +67,9 @@
  * En endret side lastes opp når siden selv eller en datafil den viser, er ulik
  * bøtta; en datafil den viser, bare når MD5 er ulik bøtta eller filen mangler
  * der. En datafil lastes dermed aldri opp uten at en side som viser den, er
- * endret og lastes opp i samme kjøring. En side som er endret bare fordi en
+ * endret og lastes opp i samme kjøring. HTML-fila til et diagram lastes i
+ * tillegg bare opp når en diagramfil den hører til, er lastet opp eller lik
+ * bøtta. En side som er endret bare fordi en
  * datafil er slettet lokalt, lastes ikke opp: synk lister datafilen med rådet
  * om `--fjern` i stedet, og siden er `endret` til datafilen er fjernet fra
  * bøtta. Avviste sider og sider som mangler lokalt, rapporteres, men
@@ -1322,6 +1328,8 @@ interface Kjøring {
   navngitt: Set<string>;
   /** Hver side med stiene til datafilene den viser som ikke finnes lokalt. */
   manglerTil: Map<Vurdering, string[]>;
+  /** HTML-fila til et diagram med diagramfilene den hører til. Leseren leser den bare når en av dem kan leses. */
+  diagramfilerTil: Map<Vurdering, Vurdering[]>;
   /** HTML-fila (NFC) til hver diagramfil sidene viser, også de som ikke finnes. */
   diagramHtmlFiler: Set<string>;
   /** Avviser en datafil når alle sidene som viser den, er avvist. Kjøres etter hver sjekk som kan avvise en side. */
@@ -1329,6 +1337,7 @@ interface Kjøring {
 }
 
 const SIDE_AVVIST = "siden som viser filen, er avvist";
+const DIAGRAM_AVVIST = "diagramfila HTML-fila hører til, er avvist";
 
 /**
  * Vurderer stiene og datafilene sidene viser, slik publiseringen gjør det før
@@ -1364,6 +1373,8 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
   // HTML-fila hver diagramfil tegnes fra, og sidene som viser diagrammet.
   const htmlTil = new Map<string, string>();
   const htmlVisesAv = new Map<string, Vurdering[]>();
+  const diagramfilerAv = new Map<string, Vurdering[]>();
+  const diagramfilerTil = new Map<Vurdering, Vurdering[]>();
   const knytt = (v: Vurdering, sider: Vurdering[]) => {
     for (const side of sider) datafilerTil.set(side, [...(datafilerTil.get(side) ?? []), v]);
   };
@@ -1403,12 +1414,15 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
     vurderinger.push(v);
     // Leseren leser HTML-fila bare når diagramfila kan leses.
     const html = htmlTil.get(rel);
-    if (html !== undefined) htmlVisesAv.set(html, [...new Set([...(htmlVisesAv.get(html) ?? []), ...sider])]);
+    if (html !== undefined) {
+      htmlVisesAv.set(html, [...new Set([...(htmlVisesAv.get(html) ?? []), ...sider])]);
+      diagramfilerAv.set(html, [...(diagramfilerAv.get(html) ?? []), v]);
+    }
   }
   // HTML-fila er en side for speilet og skannes som en side. En HTML-fil som
   // også er oppgitt, er allerede vurdert og trenger ingen side for å lastes opp.
   for (const [rel, sider] of htmlVisesAv) {
-    const oppgittHtml = vurderinger.find((v) => v.rel === rel);
+    const oppgittHtml = vurderinger.find((v) => v.rel.normalize("NFC") === rel.normalize("NFC"));
     if (oppgittHtml) {
       knytt(oppgittHtml, sider);
       continue;
@@ -1429,6 +1443,7 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
     }
     const v = vurderFil(r.abs, rel, tillatIdent);
     sideneTil.set(v, sider);
+    diagramfilerTil.set(v, diagramfilerAv.get(rel)!);
     knytt(v, sider);
     vurderinger.push(v);
   }
@@ -1451,6 +1466,10 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
     for (const [v, sider] of sideneTil) {
       if (sider.every((side) => side.avslag.length > 0) && !v.avslag.includes(SIDE_AVVIST)) v.avslag.push(SIDE_AVVIST);
     }
+    // Etter løkken over: en diagramfil avvises der når sidene er avvist.
+    for (const [v, diagramfiler] of diagramfilerTil) {
+      if (diagramfiler.every((d) => d.avslag.length > 0) && !v.avslag.includes(DIAGRAM_AVVIST)) v.avslag.push(DIAGRAM_AVVIST);
+    }
   };
   avvisDatafilerUtenSide();
   return {
@@ -1459,6 +1478,7 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
     datafilerTil,
     navngitt: new Set([...visesAv.keys()].map((r) => r.normalize("NFC"))),
     manglerTil,
+    diagramfilerTil,
     diagramHtmlFiler: new Set([...htmlTil.values()].map((r) => r.normalize("NFC"))),
     avvisDatafilerUtenSide,
   };
@@ -1515,7 +1535,7 @@ interface SynkInfo {
 function publiser(valg: Valg, bucket: string, rot: string, oppgitt: string, stier: string[], o: Omgivelser, synk?: SynkInfo): number {
   const ingress = typeof o.vars.ingress === "string" ? o.vars.ingress : "https://melosys-muninn.ansatt.nav.no";
   // Synk sender stiene fra statusen, ikke fra kommandolinjen, så de får ikke løpenummer.
-  const { vurderinger, sideneTil, manglerTil, avvisDatafilerUtenSide } = vurderKjøring(rot, oppgitt, stier, valg.tillatIdent, synk === undefined);
+  const { vurderinger, sideneTil, manglerTil, diagramfilerTil, avvisDatafilerUtenSide } = vurderKjøring(rot, oppgitt, stier, valg.tillatIdent, synk === undefined);
   // Under synk: en datafil slettet lokalt, men fortsatt i bøtta, viser den gamle filen, ikke «File not available».
   const advarsler = (v: Vurdering) =>
     synk === undefined ? v.advarsler : utenFalskManglerAdvarsel(v.advarsler, (manglerTil.get(v) ?? []).filter((rel) => synk.md5.has(rel.normalize("NFC"))));
@@ -1565,13 +1585,20 @@ function publiser(valg: Valg, bucket: string, rot: string, oppgitt: string, stie
       );
     }
   } else {
-    // En datafil lastes bare opp når minst én side som viser den, ble lastet opp i denne kjøringen.
-    const opplastet = new Set<Vurdering>();
+    // En datafil lastes bare opp når minst én side som viser den, ble lastet opp i denne kjøringen,
+    // og HTML-fila til et diagram bare når en diagramfil den hører til, ble lastet opp eller er lik bøtta.
+    const opplastet = new Set<Vurdering>(godkjent.filter(likBøtta));
     for (const v of tilOpplasting) {
       const sider = sideneTil.get(v);
       if (sider && !sider.some((side) => opplastet.has(side))) {
         feilet.push(v);
         o.feil(`Feil: ${v.visning} er ikke lastet opp: ingen side som viser den, ble lastet opp`);
+        continue;
+      }
+      const diagramfiler = diagramfilerTil.get(v);
+      if (diagramfiler && !diagramfiler.some((d) => opplastet.has(d))) {
+        feilet.push(v);
+        o.feil(`Feil: ${v.visning} er ikke lastet opp: ingen diagramfil den hører til, ble lastet opp`);
         continue;
       }
       const mål = `gs://${bucket}/${v.objekt}`;
@@ -1771,7 +1798,7 @@ function lagStatus(bucket: string, rot: string, tillatIdent: boolean, o: Omgivel
     s.avslag.push(...side.avslag);
     for (const d of datafiler) for (const a of d.advarsler) s.advarsler.push(a.startsWith(`${d.visning}:`) ? a : `${d.visning}: ${a}`);
     // Et skannerfunn starter allerede med filens visning (`sti:linje: …`); andre avslag får den foran.
-    for (const d of datafiler) for (const a of d.avslag) if (a !== SIDE_AVVIST) s.avslag.push(a.startsWith(`${d.visning}:`) ? a : `${d.visning}: ${a}`);
+    for (const d of datafiler) for (const a of d.avslag) if (a !== SIDE_AVVIST && a !== DIAGRAM_AVVIST) s.avslag.push(a.startsWith(`${d.visning}:`) ? a : `${d.visning}: ${a}`);
     if (s.avslag.length > 0) {
       s.tilstand = "avvist";
       continue;

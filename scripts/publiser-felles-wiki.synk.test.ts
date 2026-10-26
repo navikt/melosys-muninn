@@ -815,3 +815,16 @@ describe("diagrammer i --status og --synk", () => {
     expect(r.ut).not.toContain("relPath=plans%2Fflyt.html");
   });
 });
+
+describe("fiksrunde 1 batch 2: HTML-fila følger diagramfila i --status", () => {
+  test("4: en avvist diagramfil står én gang på siden, uten følgeavslaget på HTML-fila", () => {
+    skriv("plans/f.mdx", '# Flyt\n<Diagram src="flyt.workflow.json" />\n');
+    skriv("plans/flyt.workflow.json", `{"id":"${FNR}"}\n`);
+    skriv("plans/flyt.html", "<svg></svg>\n");
+    bøtte({ "plans/f.mdx": '# Flyt\n<Diagram src="flyt.workflow.json" />\n' });
+    const s = side(json().data, "plans/f.mdx")!;
+    expect(s.tilstand).toBe("avvist");
+    expect(s.avslag).toHaveLength(1);
+    expect(s.avslag[0]).toMatch(/^plans\/flyt\.workflow\.json:1: fødselsnummer/);
+  });
+});

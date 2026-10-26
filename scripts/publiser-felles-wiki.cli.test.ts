@@ -716,3 +716,38 @@ describe("diagrammer en side viser", () => {
     expect(r.ut).toMatch(/AVVIST  plans\/flyt-liv\.html\n {4}avslag: siden som viser filen, er avvist/);
   });
 });
+
+describe("fiksrunde 1 batch 2: HTML-fila følger diagramfila", () => {
+  const SIDE = '# Flyt\n<Diagram src="flyt.workflow.json" />\n';
+  function filer(json: string) {
+    skriv("plans/f.mdx", SIDE);
+    skriv("plans/flyt.workflow.json", json);
+    skriv("plans/flyt.html", "<svg></svg>\n");
+  }
+
+  test("4: avvises diagramfila, avvises HTML-fila og lastes ikke opp", () => {
+    filer(`{"id":"${FNR}"}\n`);
+    const r = kjør([rot, "plans/f.mdx"]);
+    expect(r.kode).toBe(1);
+    expect(destinasjoner()).toEqual(["gs://felles-test/plans/f.mdx"]);
+    expect(r.ut).toMatch(/AVVIST  plans\/flyt\.html\n {4}avslag: diagramfila HTML-fila hører til, er avvist/);
+  });
+
+  test("4: feiler opplastingen av diagramfila, lastes HTML-fila ikke opp", () => {
+    filer('{"nodes":[]}\n');
+    writeFileSync(path.join(falsk, "feil"), "gs://felles-test/plans/flyt.workflow.json\n");
+    const r = kjør([rot, "plans/f.mdx"]);
+    expect(r.kode).toBe(3);
+    expect(destinasjoner()).toEqual(["gs://felles-test/plans/f.mdx", "gs://felles-test/plans/flyt.workflow.json"]);
+    expect(r.ut).toContain("plans/flyt.html er ikke lastet opp: ingen diagramfil den hører til, ble lastet opp");
+  });
+
+  test("5: en HTML-fil oppgitt i NFD, som siden navngir i NFC, vurderes og lastes opp én gang", () => {
+    skriv("plans/f.mdx", '# Flyt\n<Diagram src="skå.workflow.json" />\n');
+    skriv("plans/skå.workflow.json", '{"nodes":[]}\n');
+    skriv("plans/skå.html", "<svg></svg>\n");
+    const r = kjør([rot, "plans/f.mdx", "plans/skå.html"]);
+    expect(r.kode).toBe(0);
+    expect(destinasjoner().filter((d) => d!.normalize("NFC").endsWith("skå.html"))).toHaveLength(1);
+  });
+});
