@@ -1330,8 +1330,10 @@ interface Kjøring {
   manglerTil: Map<Vurdering, string[]>;
   /** HTML-fila til et diagram med diagramfilene den hører til. Leseren leser den bare når en av dem kan leses. */
   diagramfilerTil: Map<Vurdering, Vurdering[]>;
-  /** HTML-fila (NFC) til hver diagramfil sidene viser, også de som ikke finnes. */
+  /** HTML-fila (NFC) til hver diagramfil sidene viser som finnes lokalt: den er knyttet til sidene i `datafilerTil` eller `manglerTil`. */
   diagramHtmlFiler: Set<string>;
+  /** HTML-fila (NFC) til hver diagramfil sidene viser, også de som ikke finnes. */
+  navngittDiagramHtml: Set<string>;
   /** Avviser en datafil når alle sidene som viser den, er avvist. Kjøres etter hver sjekk som kan avvise en side. */
   avvisDatafilerUtenSide: () => void;
 }
@@ -1479,7 +1481,8 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
     navngitt: new Set([...visesAv.keys()].map((r) => r.normalize("NFC"))),
     manglerTil,
     diagramfilerTil,
-    diagramHtmlFiler: new Set([...htmlTil.values()].map((r) => r.normalize("NFC"))),
+    diagramHtmlFiler: new Set([...htmlVisesAv.keys()].map((r) => r.normalize("NFC"))),
+    navngittDiagramHtml: new Set([...htmlTil.values()].map((r) => r.normalize("NFC"))),
     avvisDatafilerUtenSide,
   };
 }
@@ -1767,13 +1770,15 @@ function lagStatus(bucket: string, rot: string, tillatIdent: boolean, o: Omgivel
     .filter((n) => datatype(n) !== null && !k.navngitt.has(n.normalize("NFC")))
     .sort();
   // HTML-fila til et diagram en lest side viser, hører til den siden og får
-  // ingen egen rad. HTML-fila ved en diagramfil ingen lest side viser, er
-  // like foreldreløs som diagramfila.
-  const utenSett = new Set(uten);
+  // ingen egen rad, så lenge diagramfila finnes lokalt: da står endringer og
+  // avslag på sidens rad. HTML-fila ved en diagramfil ingen lest side viser, er
+  // like foreldreløs som diagramfila. Den heter som muninn lager den: stammen
+  // og `.html` med små bokstaver.
+  const utenNfc = new Set(uten.map((n) => n.normalize("NFC")));
   const foreldreløsHtml = objekter
     .map((x) => x.navn)
-    .filter((n) => endelse(n) === ".html" && !k.diagramHtmlFiler.has(n.normalize("NFC")))
-    .filter((n) => DIAGRAM_ENDELSER.some((e) => utenSett.has(n.slice(0, -".html".length) + e)));
+    .filter((n) => n.endsWith(".html") && !k.navngittDiagramHtml.has(n.normalize("NFC")))
+    .filter((n) => DIAGRAM_ENDELSER.some((e) => utenNfc.has((n.slice(0, -".html".length) + e).normalize("NFC"))));
   const tilhørerSide = (objekt: string) => k.diagramHtmlFiler.has(objekt.normalize("NFC")) || foreldreløsHtml.includes(objekt);
   for (let i = sider.length - 1; i >= 0; i--) if (tilhørerSide(sider[i]!.objekt)) sider.splice(i, 1);
 

@@ -828,3 +828,52 @@ describe("fiksrunde 1 batch 2: HTML-fila følger diagramfila i --status", () => 
     expect(s.avslag[0]).toMatch(/^plans\/flyt\.workflow\.json:1: fødselsnummer/);
   });
 });
+
+describe("fiksrunde 2 batch 1: hvilke HTML-filer som skjules", () => {
+  const SIDE_ = '# Flyt\n<Diagram src="flyt.workflow.json" />\n';
+  const JSON_ = '{"nodes":[]}\n';
+
+  test("A1: mangler diagramfila lokalt, beholder HTML-fila sin egen rad, med avslaget", () => {
+    skriv("plans/f.mdx", SIDE_);
+    skriv("plans/flyt.html", "<svg><text>Z990123</text></svg>\n");
+    bøtte({ "plans/f.mdx": SIDE_, "plans/flyt.workflow.json": JSON_, "plans/flyt.html": "<svg></svg>\n" });
+    const r = kjør(["--status", rot]);
+    expect(r.ut).toMatch(/AVVIST +plans\/flyt\.html/);
+    expect(r.ut).toContain("1 endret, 1 avvist");
+  });
+
+  test("A2: en .HTML-side ved en foreldreløs diagramfil er ikke HTML-fila til diagrammet", () => {
+    skriv("plans/f.mdx", "# Flyt\n");
+    skriv("plans/X.HTML", "<p>ny</p>\n");
+    bøtte({ "plans/f.mdx": "# Flyt\n", "plans/X.workflow.json": JSON_, "plans/X.HTML": "<p>gammel</p>\n" });
+    const { data } = json();
+    expect(side(data, "plans/X.HTML")!.tilstand).toBe("endret");
+    expect(data.foreldreløse).toEqual(["plans/X.workflow.json"]);
+  });
+
+  test("A4: en HTML-fil i NFD ved en foreldreløs diagramfil i NFC er foreldreløs med den", () => {
+    skriv("plans/f.mdx", "# Flyt\n");
+    bøtte({ "plans/f.mdx": "# Flyt\n", "plans/flå.html": "<svg></svg>\n", "plans/flå.workflow.json": JSON_ });
+    const { data } = json();
+    expect(data.sider.map((s) => s.relPath)).toEqual(["plans/f.mdx"]);
+    expect(data.foreldreløse.map((n) => n.normalize("NFC"))).toEqual(["plans/flå.html", "plans/flå.workflow.json"]);
+  });
+
+  test("HTML-fila til et diagram en side viser, er ikke foreldreløs selv om en annen diagramfil med samme stamme er det", () => {
+    skriv("plans/f.mdx", SIDE_);
+    skriv("plans/flyt.workflow.json", JSON_);
+    skriv("plans/flyt.html", "<svg></svg>\n");
+    bøtte({ "plans/f.mdx": SIDE_, "plans/flyt.workflow.json": JSON_, "plans/flyt.html": "<svg></svg>\n", "plans/flyt.architecture.json": JSON_ });
+    expect(json().data.foreldreløse).toEqual(["plans/flyt.architecture.json"]);
+  });
+
+  test("mangler diagramfila lokalt, er HTML-fila den navngir ikke foreldreløs ved en annen foreldreløs diagramfil", () => {
+    skriv("plans/f.mdx", SIDE_);
+    skriv("plans/flyt.html", "<svg></svg>\n");
+    bøtte({ "plans/f.mdx": SIDE_, "plans/flyt.workflow.json": JSON_, "plans/flyt.html": "<svg></svg>\n", "plans/flyt.architecture.json": JSON_ });
+    const { data } = json();
+    // Siden er endret (diagramfila er slettet lokalt), så foreldreløse er bare mulige.
+    expect((data as unknown as { muligensForeldreløse: string[] }).muligensForeldreløse).toEqual(["plans/flyt.architecture.json"]);
+    expect(side(data, "plans/flyt.html")!.tilstand).toBe("uendret");
+  });
+});
