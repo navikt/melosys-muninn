@@ -877,3 +877,21 @@ describe("fiksrunde 2 batch 1: hvilke HTML-filer som skjules", () => {
     expect(side(data, "plans/flyt.html")!.tilstand).toBe("uendret");
   });
 });
+
+describe("fiksrunde 2 batch 2: NFC i --status", () => {
+  test("A3: HTML-fila i bøtta i NFD hører til siden som navngir diagrammet i NFC", () => {
+    skriv("plans/f.mdx", '# F\n<Diagram src="flå.workflow.json" />\n');
+    skriv("plans/flå.workflow.json", '{"nodes":[]}\n');
+    skriv("plans/flå.html", "<svg></svg>\n");
+    bøtte({ "plans/f.mdx": '# F\n<Diagram src="flå.workflow.json" />\n', "plans/flå.workflow.json": '{"nodes":[]}\n', "plans/flå.html": "<svg></svg>\n" });
+    expect(json().data.sider.map((s) => s.relPath)).toEqual(["plans/f.mdx"]);
+  });
+
+  test("A3: en diagramfil i NFD og HTML-fila i NFC ved den er foreldreløse sammen", () => {
+    skriv("plans/f.mdx", "# Flyt\n");
+    bøtte({ "plans/f.mdx": "# Flyt\n", "plans/flå.html": "<svg></svg>\n", "plans/flå.workflow.json": '{"nodes":[]}\n' });
+    const { data } = json();
+    expect(data.sider.map((s) => s.relPath)).toEqual(["plans/f.mdx"]);
+    expect(data.foreldreløse.map((n) => n.normalize("NFC")).sort()).toEqual(["plans/flå.html", "plans/flå.workflow.json"]);
+  });
+});

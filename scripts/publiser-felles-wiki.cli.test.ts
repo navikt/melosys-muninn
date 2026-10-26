@@ -751,3 +751,38 @@ describe("fiksrunde 1 batch 2: HTML-fila følger diagramfila", () => {
     expect(destinasjoner().filter((d) => d!.normalize("NFC").endsWith("skå.html"))).toHaveLength(1);
   });
 });
+
+describe("fiksrunde 2 batch 2: HTML-fila delt av flere diagramfiler", () => {
+  test("B1: to sider navngir diagramfila i NFC og NFD; er den ene avvist, lastes HTML-fila opp med den andre", () => {
+    skriv("plans/a.mdx", `# A\n<Diagram src="skå.workflow.json" />\n${FNR}\n`);
+    skriv("plans/b.mdx", '# B\n<Diagram src="skå.workflow.json" />\n');
+    skriv("plans/skå.workflow.json", '{"nodes":[]}\n');
+    skriv("plans/skå.html", "<svg></svg>\n");
+    const r = kjør([rot, "plans/a.mdx", "plans/b.mdx"]);
+    expect(r.kode).toBe(1);
+    expect(destinasjoner().filter((d) => d!.normalize("NFC").endsWith("skå.html"))).toHaveLength(1);
+    // Én vurdering av HTML-fila, godkjent.
+    expect(r.ut.normalize("NFC").match(/^(OK |AVVIST) +plans\/sk\u00e5\.html$/gm)).toEqual(["OK      plans/sk\u00e5.html"]);
+  });
+
+  test("B2: avvises én av to diagramfiler, lastes HTML-fila opp med den andre", () => {
+    skriv("plans/f.mdx", '# F\n<Diagram src="flyt.workflow.json" />\n<Diagram src="flyt.architecture.json" />\n');
+    skriv("plans/flyt.workflow.json", `{"id":"${FNR}"}\n`);
+    skriv("plans/flyt.architecture.json", '{"components":[]}\n');
+    skriv("plans/flyt.html", "<svg></svg>\n");
+    const r = kjør([rot, "plans/f.mdx"]);
+    expect(r.kode).toBe(1);
+    expect(destinasjoner()).toContain("gs://felles-test/plans/flyt.html");
+  });
+
+  test("B2: feiler opplastingen av én av to diagramfiler, lastes HTML-fila opp med den andre", () => {
+    skriv("plans/f.mdx", '# F\n<Diagram src="flyt.workflow.json" />\n<Diagram src="flyt.architecture.json" />\n');
+    skriv("plans/flyt.workflow.json", '{"nodes":[]}\n');
+    skriv("plans/flyt.architecture.json", '{"components":[]}\n');
+    skriv("plans/flyt.html", "<svg></svg>\n");
+    writeFileSync(path.join(falsk, "feil"), "gs://felles-test/plans/flyt.workflow.json\n");
+    const r = kjør([rot, "plans/f.mdx"]);
+    expect(r.kode).toBe(3);
+    expect(destinasjoner()).toContain("gs://felles-test/plans/flyt.html");
+  });
+});

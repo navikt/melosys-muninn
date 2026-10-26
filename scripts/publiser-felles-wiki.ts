@@ -1374,7 +1374,8 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
   const manglerTil = new Map<Vurdering, string[]>();
   // HTML-fila hver diagramfil tegnes fra, og sidene som viser diagrammet.
   const htmlTil = new Map<string, string>();
-  const htmlVisesAv = new Map<string, Vurdering[]>();
+  // Nøkkelen er NFC: sider som skriver navnet i NFC og NFD, viser samme fil.
+  const htmlVisesAv = new Map<string, { rel: string; sider: Vurdering[] }>();
   const diagramfilerAv = new Map<string, Vurdering[]>();
   const diagramfilerTil = new Map<Vurdering, Vurdering[]>();
   const knytt = (v: Vurdering, sider: Vurdering[]) => {
@@ -1417,14 +1418,16 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
     // Leseren leser HTML-fila bare når diagramfila kan leses.
     const html = htmlTil.get(rel);
     if (html !== undefined) {
-      htmlVisesAv.set(html, [...new Set([...(htmlVisesAv.get(html) ?? []), ...sider])]);
-      diagramfilerAv.set(html, [...(diagramfilerAv.get(html) ?? []), v]);
+      const nøkkel = html.normalize("NFC");
+      const før = htmlVisesAv.get(nøkkel);
+      htmlVisesAv.set(nøkkel, { rel: før?.rel ?? html, sider: [...new Set([...(før?.sider ?? []), ...sider])] });
+      diagramfilerAv.set(nøkkel, [...(diagramfilerAv.get(nøkkel) ?? []), v]);
     }
   }
   // HTML-fila er en side for speilet og skannes som en side. En HTML-fil som
   // også er oppgitt, er allerede vurdert og trenger ingen side for å lastes opp.
-  for (const [rel, sider] of htmlVisesAv) {
-    const oppgittHtml = vurderinger.find((v) => v.rel.normalize("NFC") === rel.normalize("NFC"));
+  for (const [nøkkel, { rel, sider }] of htmlVisesAv) {
+    const oppgittHtml = vurderinger.find((v) => v.rel.normalize("NFC") === nøkkel);
     if (oppgittHtml) {
       knytt(oppgittHtml, sider);
       continue;
@@ -1445,7 +1448,7 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
     }
     const v = vurderFil(r.abs, rel, tillatIdent);
     sideneTil.set(v, sider);
-    diagramfilerTil.set(v, diagramfilerAv.get(rel)!);
+    diagramfilerTil.set(v, diagramfilerAv.get(nøkkel)!);
     knytt(v, sider);
     vurderinger.push(v);
   }
@@ -1481,7 +1484,7 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
     navngitt: new Set([...visesAv.keys()].map((r) => r.normalize("NFC"))),
     manglerTil,
     diagramfilerTil,
-    diagramHtmlFiler: new Set([...htmlVisesAv.keys()].map((r) => r.normalize("NFC"))),
+    diagramHtmlFiler: new Set(htmlVisesAv.keys()),
     navngittDiagramHtml: new Set([...htmlTil.values()].map((r) => r.normalize("NFC"))),
     avvisDatafilerUtenSide,
   };
