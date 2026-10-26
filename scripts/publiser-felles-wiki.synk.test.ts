@@ -728,3 +728,63 @@ describe("fiksrunde 3", () => {
     expect(sd.advarsler.filter((a) => a.includes("ligger fortsatt i bøtta"))).toHaveLength(1);
   });
 });
+
+describe("diagrammer i --status og --synk", () => {
+  const DIAGRAMSIDE = '# Flyt\n<Diagram src="flyt.workflow.json" />\n';
+  const JSON_ = '{"nodes":[]}\n';
+  const HTML = "<!doctype html><svg></svg>\n";
+  function publisert(endre: Record<string, string> = {}) {
+    const filer = { "plans/f.mdx": DIAGRAMSIDE, "plans/flyt.workflow.json": JSON_, "plans/flyt.html": HTML };
+    for (const [rel, innhold] of Object.entries({ ...filer, ...endre })) skriv(rel, innhold);
+    return filer;
+  }
+
+  test("uendret når siden, diagramfila og HTML-fila er lik bøtta", () => {
+    bøtte(publisert());
+    const { data } = json();
+    expect(side(data, "plans/f.mdx")!.tilstand).toBe("uendret");
+    expect(data.foreldreløse).toEqual([]);
+  });
+
+  test("en endret diagramfil gjør siden endret", () => {
+    bøtte(publisert({ "plans/flyt.workflow.json": '{"nodes":[1]}\n' }));
+    expect(side(json().data, "plans/f.mdx")).toMatchObject({ tilstand: "endret", endredeFiler: ["plans/flyt.workflow.json"] });
+  });
+
+  test("en endret HTML-fil gjør siden endret, og HTML-fila selv", () => {
+    bøtte(publisert({ "plans/flyt.html": "<svg>ny</svg>\n" }));
+    const { data } = json();
+    expect(side(data, "plans/f.mdx")).toMatchObject({ tilstand: "endret", endredeFiler: ["plans/flyt.html"] });
+    expect(side(data, "plans/flyt.html")!.tilstand).toBe("endret");
+  });
+
+  test("en HTML-fil som ikke er i bøtta ennå, gjør siden endret", () => {
+    const { "plans/flyt.html": _, ...uten } = publisert();
+    bøtte(uten);
+    expect(side(json().data, "plans/f.mdx")).toMatchObject({ tilstand: "endret", endredeFiler: ["plans/flyt.html"], advarsler: ["plans/flyt.html: ikke lastet opp ennå"] });
+  });
+
+  test("en diagramfil i bøtta som ingen side viser, er foreldreløs", () => {
+    skriv("plans/f.mdx", "# Flyt\n");
+    bøtte({ "plans/f.mdx": "# Flyt\n", "plans/flyt.workflow.json": JSON_ });
+    expect(json().data.foreldreløse).toEqual(["plans/flyt.workflow.json"]);
+  });
+
+  test("--synk laster opp siden og den endrede diagramfila, ikke HTML-fila som er lik bøtta", () => {
+    const filer = publisert();
+    skriv("plans/flyt.workflow.json", '{"nodes":[1]}\n');
+    bøtte(filer);
+    const r = kjør(["--synk", rot]);
+    expect(r.kode).toBe(0);
+    expect(destinasjoner()).toEqual(["gs://felles-test/plans/f.mdx", "gs://felles-test/plans/flyt.workflow.json"]);
+    expect(r.ut).toContain("uendret i bøtta, lastes ikke opp: plans/flyt.html");
+  });
+
+  test("--synk laster opp en endret HTML-fil én gang", () => {
+    bøtte(publisert({ "plans/flyt.html": "<svg>ny</svg>\n" }));
+    const r = kjør(["--synk", rot]);
+    expect(r.kode).toBe(0);
+    expect(destinasjoner().filter((d) => d!.endsWith("flyt.html"))).toHaveLength(1);
+    expect(destinasjoner()).not.toContain("gs://felles-test/plans/flyt.workflow.json");
+  });
+});

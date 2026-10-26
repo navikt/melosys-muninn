@@ -9,8 +9,9 @@
  *   bun scripts/publiser-felles-wiki.ts --status [--json] [--tillat-ident] [--bucket <navn>] [--] <wiki-rot>
  *   bun scripts/publiser-felles-wiki.ts --synk [--dry-run] [--tillat-ident] [--bucket <navn>] [--] <wiki-rot>
  *
- * `--fjern` sletter bare objektene som oppgis: datafilene en side viser, må
- * oppgis i tillegg til siden, ellers blir de liggende i bøtta.
+ * `--fjern` sletter bare objektene som oppgis: datafilene en side viser, og
+ * HTML-fila til hvert diagram, må oppgis i tillegg til siden, ellers blir de
+ * liggende i bøtta.
  *
  * Bøtta er synklisten: hver side (.md .mdx .html) og `.wiki-reader.json` på
  * rotnivå som ligger i bøtta, følges. En side legges til ved å publisere den
@@ -76,21 +77,32 @@
  * alt i bøtta til hele teamet. Hver fil sjekkes, og en fil som feiler, lastes
  * ikke opp:
  *   - sti: speilets egne regler — bare .md, .mdx, .html og `.wiki-reader.json`
- *     på rotnivå, og datafilene en side viser (se under); ingen skjulte
+ *     på rotnivå, og datafilene en side viser, med HTML-fila til hvert
+ *     diagram (se under); ingen skjulte
  *     segmenter, `..`, omvendt skråstrek, kontroll-
  *     eller retningstegn, eller segmenter over 211 byte. I tillegg avvises
  *     jokertegnene `[ ] * ?` (gcloud tolker dem som mønster), navn som slutter
  *     på `#<sifre>` (gcloud leser det som en objektversjon), symlenker og navn
  *     som kolliderer med et annet levende objekt under små bokstaver + NFC.
- *     Bilder og uttrekk (.json .tsv .xlsx .txt) publiseres aldri.
+ *     Bilder og uttrekk (.json .tsv .xlsx .txt) publiseres aldri; en
+ *     archify-fil (under) er ikke et uttrekk.
  *   - datafiler: en side lastes opp sammen med filene dens `<Query csv= sql=>`,
- *     `<CaseBoard src=>` og `<DeltaTable src=>` navngir (.csv .sql .yaml .yml),
- *     uansett hvor under wiki-roten de ligger. Porten (`navngitteDatafiler`)
- *     finner minst det muninns leser leser, og noen ganger mer. En .csv, .sql
- *     eller .yaml som oppgis alene, uten en side som viser den, avvises, og en
- *     datafil lastes bare opp når minst én side som viser den, er godkjent og
- *     lastet opp i samme kjøring. Datafiler skannes som sider, med unntaket
- *     for CSV under «innhold». Med `--tillat-ident` er NAVident og e-post i en
+ *     `<CaseBoard src=>`, `<DeltaTable src=>`, `<Diagram src=>` og
+ *     `<Steps src=>` navngir (.csv .sql .yaml .yml, og for de to siste
+ *     archify-filene .architecture.json .workflow.json .lifecycle.json, aldri
+ *     en bar .json), uansett hvor under wiki-roten de ligger. Porten
+ *     (`navngitteDatafiler`) finner minst det muninns leser leser, og noen
+ *     ganger mer. En datafil som oppgis alene, uten en side som viser den,
+ *     avvises, og en datafil lastes bare opp når minst én side som viser den,
+ *     er godkjent og lastet opp i samme kjøring. Datafiler skannes som sider,
+ *     med unntaket for CSV under «innhold».
+ *     Leseren tegner et diagram fra HTML-fila archify skrev ved siden av
+ *     diagramfila: samme sti med endelsen byttet mot .html
+ *     (`./x.workflow.json` → `x.html`, `diagramHtml`). Den lastes opp med
+ *     diagramfila etter de samme reglene, men vurderes som en side (2 MB) og
+ *     får ingen egen adresse. Mangler den, er det en advarsel: leseren viser
+ *     da diagrammet som tekst. `<Embed src=>` er ikke en datafil, så en
+ *     HTML-fil siden bare bygger inn, må oppgis selv. Med `--tillat-ident` er NAVident og e-post i en
  *     datafil advarsler, som i en side, og filen lastes opp byte for byte uten
  *     at noen kolonne fjernes. Uten flagget: er alle funnene i en CSV
  *     NAVident, fjernes hver kolonne med et funn fra kopien som lastes opp, og
@@ -474,7 +486,7 @@ export function sjekkSti(rel: string, navngitt = false): string | null {
   const nfc = rel.normalize("NFC");
   if (nfc === LESER_KONFIG) return null;
   if (nfc.split("/").some((d) => d.startsWith("."))) return "skjult fil eller mappe";
-  const ext = path.posix.extname(nfc).toLowerCase();
+  const ext = endelse(nfc);
   if (datatype(nfc) !== null) {
     return navngitt ? null : `filtypen ${ext} publiseres bare sammen med en side som viser den (csv=, sql= eller src=)`;
   }
@@ -488,7 +500,7 @@ export function sjekkSti(rel: string, navngitt = false): string | null {
 //
 // En port av muninns regel for hvilke filer leseren leser for en side
 // (`loadPageFiles` i src/wiki/page-files.ts): `<Query csv= sql=>`,
-// `<CaseBoard src=>` og `<DeltaTable src=>`, utenom frontmatter og
+// `<CaseBoard src=>`, `<DeltaTable src=>`, `<Diagram src=>` og `<Steps src=>`, utenom frontmatter og
 // kodeblokker, med ref-en relativ til sidens mappe. Testen
 // publiser-felles-wiki.datafiler.test.ts kjører den mot
 // publiser-felles-wiki.datafiler.cases.json, som er en kopi av muninns
@@ -501,15 +513,27 @@ export function sjekkSti(rel: string, navngitt = false): string | null {
 // en beholder på samme linje som muninn ikke kjenner. Da lastes en skannet fil
 // opp som siden ikke viser.
 
-export type Datatype = "csv" | "sql" | "yaml";
-const DATATYPE_ENDELSER: Record<Datatype, readonly string[]> = { csv: [".csv"], sql: [".sql"], yaml: [".yaml", ".yml"] };
+export type Datatype = "csv" | "sql" | "yaml" | "diagram";
+/** DIAGRAM_SUFFIXES i muninn: archify-diagrammene. Aldri en bar `.json`. */
+export const DIAGRAM_ENDELSER = [".architecture.json", ".workflow.json", ".lifecycle.json"] as const;
+const DATATYPE_ENDELSER: Record<Datatype, readonly string[]> = {
+  csv: [".csv"],
+  sql: [".sql"],
+  yaml: [".yaml", ".yml"],
+  diagram: DIAGRAM_ENDELSER,
+};
 export const DATA_ENDELSER = new Set(Object.values(DATATYPE_ENDELSER).flat());
 
-/** Endelsen fra siste `.` i siste segment, små bokstaver; ingen for en punktfil. */
+/**
+ * pageFileExtension i muninn, små bokstaver: en archify-endelse når navnet har
+ * en stamme foran den, ellers fra siste `.` i siste segment; ingen for en punktfil.
+ */
 function endelse(p: string): string {
-  const navn = p.slice(p.lastIndexOf("/") + 1);
+  const navn = p.slice(p.lastIndexOf("/") + 1).toLowerCase();
+  const diagram = DIAGRAM_ENDELSER.find((e) => navn.length > e.length && navn.endsWith(e));
+  if (diagram) return diagram;
   const punkt = navn.lastIndexOf(".");
-  return punkt > 0 ? navn.slice(punkt).toLowerCase() : "";
+  return punkt > 0 ? navn.slice(punkt) : "";
 }
 
 /** Datatypen endelsen sier, eller null. */
@@ -529,7 +553,8 @@ export interface NavngittDatafil {
   rel: string | null;
 }
 
-const DATA_KOMPONENTER = new Set(["Query", "CaseBoard", "DeltaTable"]);
+const DATA_KOMPONENTER = new Set(["Query", "CaseBoard", "DeltaTable", "Diagram", "Steps"]);
+const SRC_TYPE: Record<string, Datatype> = { CaseBoard: "yaml", DeltaTable: "csv", Diagram: "diagram", Steps: "diagram" };
 /** COMPONENT_OPEN_RE i muninn: attributter bare med doble anførselstegn. */
 const ÅPNE_TAGG = /^<([A-Za-z][A-Za-z0-9]*)((?:\s+[A-Za-z][\w-]*="[^"]*")*)\s*(\/?)>(.*)$/;
 const ATTRIBUTT = /([A-Za-z][\w-]*)="([^"]*)"/g;
@@ -649,6 +674,16 @@ export function løsRef(sideRel: string, ref: string): string | null {
   return deler.join("/");
 }
 
+/**
+ * diagramSiblingRelPath i muninn: HTML-fila leseren tegner diagrammet fra, med
+ * archify-endelsen byttet mot `.html` (`./x.workflow.json` → `x.html`) og løst
+ * fra sidens mappe som ref-en. Null når ref-en ikke er en diagramfil.
+ */
+export function diagramHtml(sideRel: string, ref: string): string | null {
+  if (sjekkRef(ref, ["diagram"]) !== "ok") return null;
+  return løsRef(sideRel, `${ref.slice(0, ref.length - endelse(ref).length)}.html`);
+}
+
 /** Datafilene siden `sideRel` (posix, relativ til wiki-roten) viser, i kilderekkefølge og uten duplikater. */
 export function navngitteDatafiler(sideRel: string, tekst: string): NavngittDatafil[] {
   const linjer = utenKodeblokker(utenFrontmatter(tekst).replace(/\r\n/g, "\n").split("\n"));
@@ -666,7 +701,7 @@ export function navngitteDatafiler(sideRel: string, tekst: string): NavngittData
     if (m[1] === "Query") {
       legg(attr.csv, "csv");
       legg(attr.sql, "sql");
-    } else legg(attr.src, m[1] === "CaseBoard" ? "yaml" : "csv");
+    } else legg(attr.src, SRC_TYPE[m[1]!]!);
   });
   return [...funnet].map(([ref, typer]) => {
     const utfall = sjekkRef(ref, typer);
@@ -1243,7 +1278,7 @@ function fjern(valg: Valg, bucket: string, o: Omgivelser): number {
   }
   for (const m of mål) o.ut(`vil slette gs://${bucket}/${m.visning}`);
   if (mål.some((m) => [".md", ".mdx"].includes(path.posix.extname(m.objekt).toLowerCase()))) {
-    o.ut("(datafilene en side viser, slettes ikke med siden — oppgi dem også, ellers blir de liggende i bøtta)");
+    o.ut("(datafilene en side viser, slettes ikke med siden — oppgi dem også, og HTML-fila til hvert diagram, ellers blir de liggende i bøtta)");
   }
   if (valg.dryRun) {
     o.ut("\nTørrkjøring — ingenting er slettet.");
@@ -1324,6 +1359,9 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
   const visesAv = new Map<string, Vurdering[]>();
   const datafilerTil = new Map<Vurdering, Vurdering[]>();
   const manglerTil = new Map<Vurdering, string[]>();
+  // HTML-fila hver diagramfil tegnes fra, og sidene som viser diagrammet.
+  const htmlTil = new Map<string, string>();
+  const htmlVisesAv = new Map<string, Vurdering[]>();
   const knytt = (v: Vurdering, sider: Vurdering[]) => {
     for (const side of sider) datafilerTil.set(side, [...(datafilerTil.get(side) ?? []), v]);
   };
@@ -1334,7 +1372,11 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
       if (d.utfall === "ugyldig") side.advarsler.push(`${navn}: ugyldig filsti — kortet viser en feilmelding`);
       else if (d.utfall === "filtype") side.advarsler.push(`${navn}: feil filtype for attributtet — kortet viser en feilmelding`);
       else if (d.rel === null) side.advarsler.push(`${navn}: peker ut av wiki-roten — kortet viser «File not available»`);
-      else visesAv.set(d.rel, [...(visesAv.get(d.rel) ?? []), side]);
+      else {
+        visesAv.set(d.rel, [...(visesAv.get(d.rel) ?? []), side]);
+        const html = diagramHtml(side.rel, d.ref);
+        if (html !== null) htmlTil.set(d.rel, html);
+      }
     }
   }
   for (const [rel, sider] of visesAv) {
@@ -1345,21 +1387,45 @@ function vurderKjøring(rot: string, oppgitt: string, stier: string[], tillatIde
       vurderinger.push(v);
       continue;
     }
-    let finnes = true;
-    try {
-      lstatSync(r.abs);
-    } catch {
-      finnes = false;
-    }
-    if (!finnes) {
+    if (!finnesLokalt(r.abs)) {
       for (const side of sider) {
-        side.advarsler.push(`${visningsnavn(rel)}: filen finnes ikke — kortet viser «File not available»`);
+        side.advarsler.push(manglerAdvarsel(rel));
         manglerTil.set(side, [...(manglerTil.get(side) ?? []), rel]);
       }
       continue;
     }
     sett.add(rel);
     const v = vurderFil(r.abs, rel, tillatIdent, undefined, true);
+    sideneTil.set(v, sider);
+    knytt(v, sider);
+    vurderinger.push(v);
+    // Leseren leser HTML-fila bare når diagramfila kan leses.
+    const html = htmlTil.get(rel);
+    if (html !== undefined) htmlVisesAv.set(html, [...new Set([...(htmlVisesAv.get(html) ?? []), ...sider])]);
+  }
+  // HTML-fila er en side for speilet og skannes som en side. En HTML-fil som
+  // også er oppgitt, er allerede vurdert og trenger ingen side for å lastes opp.
+  for (const [rel, sider] of htmlVisesAv) {
+    const oppgittHtml = vurderinger.find((v) => v.rel === rel);
+    if (oppgittHtml) {
+      knytt(oppgittHtml, sider);
+      continue;
+    }
+    const r = relUnder(rot, rot, rel);
+    if (typeof r === "string") {
+      const v: Vurdering = { rel, objekt: rel.normalize("NFC"), visning: visningsnavn(rel), avslag: [r], advarsler: [], fjernet: [] };
+      knytt(v, sider);
+      vurderinger.push(v);
+      continue;
+    }
+    if (!finnesLokalt(r.abs)) {
+      for (const side of sider) {
+        side.advarsler.push(manglerAdvarsel(rel));
+        manglerTil.set(side, [...(manglerTil.get(side) ?? []), rel]);
+      }
+      continue;
+    }
+    const v = vurderFil(r.abs, rel, tillatIdent);
     sideneTil.set(v, sider);
     knytt(v, sider);
     vurderinger.push(v);
@@ -1403,9 +1469,25 @@ function avvisKollisjonerMotBøtta(godkjent: Vurdering[], eksisterende: string[]
   }
 }
 
-/** `advarsler` uten «filen finnes ikke»-advarselen for datafilene i `iBøtta` (slettet lokalt, men i bøtta). */
+/** Advarselen på siden når en fil den viser, ikke finnes lokalt. Uten HTML-fila viser leseren diagrammet som tekst. */
+function manglerAdvarsel(rel: string): string {
+  const følge = datatype(rel) === null ? "diagrammet vises som tekst, uten bilde" : "kortet viser «File not available»";
+  return `${visningsnavn(rel)}: filen finnes ikke — ${følge}`;
+}
+
+/** Navnet finnes under roten, også som symlenke (den avviser `vurderFil`). */
+function finnesLokalt(abs: string): boolean {
+  try {
+    lstatSync(abs);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** `advarsler` uten «filen finnes ikke»-advarselen for filene i `iBøtta` (slettet lokalt, men i bøtta). */
 function utenFalskManglerAdvarsel(advarsler: string[], iBøtta: string[]): string[] {
-  const falske = new Set(iBøtta.map((rel) => `${visningsnavn(rel)}: filen finnes ikke — kortet viser «File not available»`));
+  const falske = new Set(iBøtta.map(manglerAdvarsel));
   return advarsler.filter((a) => !falske.has(a));
 }
 
@@ -1495,7 +1577,8 @@ function publiser(valg: Valg, bucket: string, rot: string, oppgitt: string, stie
     }
   }
 
-  const sider = (valg.dryRun ? tilOpplasting : lastetOpp).filter((v) => SIDE_ENDELSER.has(path.posix.extname(v.objekt).toLowerCase()));
+  // HTML-fila til et diagram vises under siden, så den får ingen egen adresse.
+  const sider = (valg.dryRun ? tilOpplasting : lastetOpp).filter((v) => !sideneTil.has(v) && SIDE_ENDELSER.has(path.posix.extname(v.objekt).toLowerCase()));
   if (sider.length > 0) {
     o.ut(valg.dryRun ? "\nTørrkjøring — ingenting er lastet opp. Adresser etter publisering:" : "\nPublisert. Speilet i poden henter endringer omtrent hvert 2. minutt:");
     // En sti med funn, også en som --tillat-ident slapp gjennom, vises maskert her som overalt ellers.

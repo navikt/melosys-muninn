@@ -5,7 +5,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fjernIdentKolonner, navngitteDatafiler, vurderFil } from "./publiser-felles-wiki.ts";
+import { diagramHtml, fjernIdentKolonner, navngitteDatafiler, sjekkSti, vurderFil } from "./publiser-felles-wiki.ts";
 import fasit from "./publiser-felles-wiki.datafiler.cases.json";
 
 // Syntetisk fødselsnummer, bygget fra kontrollsifferalgoritmen.
@@ -57,6 +57,26 @@ describe("navngitteDatafiler finner også det muninn ikke leser", () => {
     expect(refs('<Ukjent><Query id="q" csv="a.csv" /></Ukjent>\n')).toEqual(["a.csv"]);
     expect(refs("<Callout tone='info'><Query id=\"q\" csv=\"b.csv\" /></Callout>\n")).toEqual(["b.csv"]);
     expect(refs('<Callout><Query id="q" csv="c.csv" />\n</Callout>\n')).toEqual(["c.csv"]);
+  });
+});
+
+describe("diagramHtml: HTML-fila leseren tegner et diagram fra (diagramSiblingRelPath i muninn)", () => {
+  test("archify-endelsen byttes mot .html, løst fra sidens mappe", () => {
+    expect(diagramHtml("flows/side.mdx", "./side-flyt.workflow.json")).toBe("flows/side-flyt.html");
+    expect(diagramHtml("flows/side.mdx", "data/x.Architecture.JSON")).toBe("flows/data/x.html");
+    expect(diagramHtml("flows/side.mdx", "../liv.lifecycle.json")).toBe("liv.html");
+  });
+  test("ingen HTML-fil for en bar .json, en ugyldig ref eller en .. over roten", () => {
+    expect(diagramHtml("a.mdx", "side.json")).toBeNull();
+    expect(diagramHtml("a.mdx", ".skjult/x.workflow.json")).toBeNull();
+    expect(diagramHtml("a.mdx", "../x.workflow.json")).toBeNull();
+    // En stamme kreves: `.workflow.json` alene er en punktfil.
+    expect(diagramHtml("a.mdx", "d/.workflow.json")).toBeNull();
+  });
+  test("en diagramfil slipper gjennom stisjekken bare når en side navngir den; en bar .json aldri", () => {
+    expect(sjekkSti("a/x.workflow.json")).toContain("bare sammen med en side");
+    expect(sjekkSti("a/x.workflow.json", true)).toBeNull();
+    expect(sjekkSti("a/x.json", true)).toContain("uttrekk");
   });
 });
 

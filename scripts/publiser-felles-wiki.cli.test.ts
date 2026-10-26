@@ -608,3 +608,111 @@ describe("datafiler en side viser", () => {
     expect(destinasjoner()).toEqual(["gs://felles-test/plans/p.mdx", "gs://felles-test/d/q.csv"]);
   });
 });
+
+describe("diagrammer en side viser", () => {
+  const SIDE = [
+    "# Flyt",
+    '<Diagram src="./flyt-i-dag.workflow.json" />',
+    '<Diagram src="kart/flyt.architecture.json" />',
+    '<Steps src="flyt-liv.lifecycle.json">',
+    "",
+    "1. Opprettet `opprettet`",
+    "",
+    "</Steps>",
+    '<Embed src="./flyt-sekvens.html" />',
+    "",
+  ].join("\n");
+  const JSON_ = '{"nodes":[]}\n';
+  const HTML = "<!doctype html><svg></svg>\n";
+  function filer() {
+    skriv("plans/flyt.mdx", SIDE);
+    for (const stamme of ["flyt-i-dag", "kart/flyt", "flyt-liv", "flyt-sekvens"]) skriv(`plans/${stamme}.html`, HTML);
+    skriv("plans/flyt-i-dag.workflow.json", JSON_);
+    skriv("plans/kart/flyt.architecture.json", JSON_);
+    skriv("plans/flyt-liv.lifecycle.json", JSON_);
+  }
+
+  test("siden lastes opp med hver diagramfil og HTML-fila ved siden av; en <Embed> tas ikke med", () => {
+    filer();
+    const r = kjør([rot, "plans/flyt.mdx"]);
+    expect(r.kode).toBe(0);
+    expect(destinasjoner()).toEqual([
+      "gs://felles-test/plans/flyt.mdx",
+      "gs://felles-test/plans/flyt-i-dag.workflow.json",
+      "gs://felles-test/plans/kart/flyt.architecture.json",
+      "gs://felles-test/plans/flyt-liv.lifecycle.json",
+      "gs://felles-test/plans/flyt-i-dag.html",
+      "gs://felles-test/plans/kart/flyt.html",
+      "gs://felles-test/plans/flyt-liv.html",
+    ]);
+    const type = (slutt: string) => opplastinger().find((k) => k.args.at(-1)!.endsWith(slutt))!.args[2];
+    expect(type("flyt-liv.lifecycle.json")).toBe("--content-type=application/json; charset=utf-8");
+    expect(type("flyt-liv.html")).toBe("--content-type=text/html; charset=utf-8");
+    // HTML-fila hører til siden og får ingen egen adresse.
+    expect(r.ut.match(/wiki\?wiki=melosys-felles/g)).toHaveLength(1);
+    expect(r.ut).toMatch(/7 lastet opp, 0 avvist/);
+  });
+
+  test("en diagramfil oppgitt alene avvises, som en bar .json; en <Diagram> med bar .json er en advarsel og laster ingenting", () => {
+    filer();
+    skriv("plans/bar.json", JSON_);
+    const alene = kjør(["--dry-run", rot, "plans/flyt-liv.lifecycle.json", "plans/bar.json"]);
+    expect(alene.kode).toBe(1);
+    expect(alene.ut).toMatch(/AVVIST  plans\/flyt-liv\.lifecycle\.json\n {4}avslag: filtypen \.lifecycle\.json publiseres bare sammen med en side/);
+    expect(alene.ut).toMatch(/AVVIST  plans\/bar\.json\n {4}avslag: filtypen \.json er et uttrekk/);
+    skriv("plans/bar.mdx", '# B\n<Diagram src="bar.json" />\n<Diagram src="flyt-liv.html" />\n');
+    const bar = kjør(["--dry-run", rot, "plans/bar.mdx"]);
+    expect(bar.kode).toBe(0);
+    expect(bar.ut).toContain("bar.json: feil filtype for attributtet");
+    expect(bar.ut).toContain("flyt-liv.html: feil filtype for attributtet");
+    expect(bar.ut).toMatch(/1 klar\(e\), 0 avvist/);
+  });
+
+  test("diagramfila og HTML-fila skannes: et fødselsnummer avviser filen, en NAVident slipper med --tillat-ident", () => {
+    filer();
+    skriv("plans/flyt-liv.lifecycle.json", `{"id":"${FNR}"}\n`);
+    skriv("plans/flyt-i-dag.html", `<svg><text>${FNR}</text></svg>\n`);
+    skriv("plans/kart/flyt.html", "<svg><text>Z990123</text></svg>\n");
+    const r = kjør(["--dry-run", rot, "plans/flyt.mdx"]);
+    expect(r.kode).toBe(1);
+    expect(r.ut).toMatch(/AVVIST  plans\/flyt-liv\.lifecycle\.json\n {4}avslag: plans\/flyt-liv\.lifecycle\.json:1: fødselsnummer/);
+    expect(r.ut).toMatch(/AVVIST  plans\/flyt-i-dag\.html\n {4}avslag: plans\/flyt-i-dag\.html:1: fødselsnummer/);
+    expect(r.ut).toMatch(/AVVIST  plans\/kart\/flyt\.html\n {4}avslag: plans\/kart\/flyt\.html:1: NAVident/);
+    expect(r.ut).not.toContain(FNR);
+    const tillatt = kjør(["--dry-run", "--tillat-ident", rot, "plans/flyt.mdx"]);
+    expect(tillatt.ut).toMatch(/OK {6}plans\/kart\/flyt\.html\n {4}advarsel: .*NAVident \*{5}23 \(tillatt med --tillat-ident\)/);
+  });
+
+  test("en HTML-fil som mangler, er en advarsel; uten diagramfila lastes HTML-fila ikke opp", () => {
+    filer();
+    rmSync(path.join(rot, "plans/flyt-i-dag.html"));
+    rmSync(path.join(rot, "plans/kart/flyt.architecture.json"));
+    const r = kjør([rot, "plans/flyt.mdx"]);
+    expect(r.kode).toBe(0);
+    expect(r.ut).toContain("plans/flyt-i-dag.html: filen finnes ikke — diagrammet vises som tekst, uten bilde");
+    expect(r.ut).toContain("plans/kart/flyt.architecture.json: filen finnes ikke — kortet viser «File not available»");
+    expect(destinasjoner()).not.toContain("gs://felles-test/plans/kart/flyt.html");
+    expect(destinasjoner()).toContain("gs://felles-test/plans/flyt-liv.html");
+  });
+
+  test("en HTML-fil oppgitt sammen med siden, og en som to diagramfiler deler, lastes opp én gang", () => {
+    filer();
+    skriv("plans/flyt.mdx", SIDE + '<Diagram src="flyt-i-dag.architecture.json" />\n');
+    skriv("plans/flyt-i-dag.architecture.json", JSON_);
+    const r = kjør([rot, "plans/flyt-liv.html", "plans/flyt.mdx"]);
+    expect(r.kode).toBe(0);
+    expect(destinasjoner().filter((d) => d!.endsWith("flyt-liv.html"))).toHaveLength(1);
+    expect(destinasjoner().filter((d) => d!.endsWith("flyt-i-dag.html"))).toHaveLength(1);
+    // Oppgitt alene er den en side med egen adresse.
+    expect(r.ut).toContain("relPath=plans%2Fflyt-liv.html");
+  });
+
+  test("en avvist side tar med seg diagramfila og HTML-fila", () => {
+    filer();
+    skriv("plans/flyt.mdx", SIDE + `\n${FNR}\n`);
+    const r = kjør([rot, "plans/flyt.mdx"]);
+    expect(r.kode).toBe(1);
+    expect(opplastinger()).toEqual([]);
+    expect(r.ut).toMatch(/AVVIST  plans\/flyt-liv\.html\n {4}avslag: siden som viser filen, er avvist/);
+  });
+});
