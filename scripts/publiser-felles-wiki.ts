@@ -104,11 +104,14 @@
  *     med unntaket for CSV under «innhold».
  *     Leseren tegner et diagram fra HTML-fila archify skrev ved siden av
  *     diagramfila: samme sti med endelsen byttet mot .html
- *     (`./x.workflow.json` → `x.html`, `diagramHtml`). Den lastes opp med
- *     diagramfila etter de samme reglene, men vurderes som en side (2 MB) og
- *     får ingen egen adresse. Mangler den, er det en advarsel: leseren viser
- *     da diagrammet som tekst. `<Embed src=>` er ikke en datafil, så en
- *     HTML-fil siden bare bygger inn, må oppgis selv. Med `--tillat-ident` er NAVident og e-post i en
+ *     (`./x.workflow.json` → `x.html`, `diagramHtml`). Den vurderes bare
+ *     når diagramfila finnes lokalt, som en side (2 MB), og får ingen egen
+ *     adresse. Den avvises når hver diagramfil den hører til, er avvist, og
+ *     lastes bare opp når en side som viser diagrammet, og en diagramfil den
+ *     hører til, er lastet opp i samme kjøring (exit 3 ellers). Mangler den,
+ *     er det en advarsel: leseren viser da diagrammet som tekst. En HTML-fil
+ *     oppgitt selv er en vanlig side. `<Embed src=>` er ikke en datafil, så
+ *     en HTML-fil siden bare bygger inn, må oppgis selv. Med `--tillat-ident` er NAVident og e-post i en
  *     datafil advarsler, som i en side, og filen lastes opp byte for byte uten
  *     at noen kolonne fjernes. Uten flagget: er alle funnene i en CSV
  *     NAVident, fjernes hver kolonne med et funn fra kopien som lastes opp, og
