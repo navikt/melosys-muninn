@@ -48,8 +48,10 @@ describe("navngitteDatafiler følger muninns regel (fasiten fra muninn)", () => 
 
 describe("filene publiseringen legger ved siden av en side (removeCases i fasiten fra muninn)", () => {
   // muninns Felles Fjern sletter disse objektene sammen med siden. Her kjøres
-  // publiseringen selv (tørrkjøring) på en wiki der hver fil finnes, også de
-  // siden bare nevner i en kodeblokk eller over roten, så en fil for mye vises.
+  // publiseringen selv (tørrkjøring) på en wiki der hver fil siden nevner,
+  // finnes, også i en kodeblokk, så en fil for mye vises. En ref over roten får
+  // en fil over roten og en fil (med HTML-fil) der refen havner om `..` kuttes
+  // ved roten, så en publisering som klemmer refen inn i roten, vises.
   // Publiseringen laster opp datafilene i siderekkefølge og HTML-filene etter
   // dem; muninn lister HTML-fila rett etter diagramfila. Derfor sammenlignes
   // filene uten rekkefølge, men med antall.
@@ -66,9 +68,15 @@ describe("filene publiseringen legger ved siden av en side (removeCases i fasite
       skriv(c.page, c.markdown);
       for (const m of c.markdown.matchAll(/\b(?:src|csv|sql)="([^"]+)"/g)) {
         const rel = path.posix.normalize(path.posix.join(path.posix.dirname(c.page), m[1]!));
-        skriv(rel.startsWith("../") ? path.posix.join("..", path.posix.basename(rel)) : rel, innhold(rel));
-        const html = rel.replace(/\.(architecture|workflow|lifecycle)\.json$/i, ".html");
-        if (html !== rel && !rel.startsWith("../")) skriv(html, innhold(html));
+        const iRoten = rel.startsWith("../")
+          ? [path.posix.resolve("/", path.posix.dirname(c.page), m[1]!).slice(1), path.posix.join(path.posix.dirname(c.page), m[1]!.replace(/^(\.\.\/)+/, ""))]
+          : [rel];
+        if (rel.startsWith("../")) skriv(path.posix.join("..", path.posix.basename(rel)), innhold(rel));
+        for (const r of new Set(iRoten)) {
+          skriv(r, innhold(r));
+          const html = r.replace(/\.(architecture|workflow|lifecycle)\.json$/i, ".html");
+          if (html !== r) skriv(html, innhold(html));
+        }
       }
       for (const t of c.targets) skriv(t, innhold(t));
       const ut: string[] = [];
@@ -77,7 +85,9 @@ describe("filene publiseringen legger ved siden av en side (removeCases i fasite
       });
       expect(ut.filter((l) => l.startsWith("AVVIST"))).toEqual([]);
       expect(kode).toBe(0);
-      const ved = ut.flatMap((l) => l.match(/^vil laste opp gs:\/\/test-botte-x\/(.+)$/)?.slice(1) ?? []).filter((o) => o !== c.page);
+      const opp = ut.flatMap((l) => l.match(/^vil laste opp gs:\/\/test-botte-x\/(.+)$/)?.slice(1) ?? []);
+      expect(opp.filter((o) => o === c.page)).toEqual([c.page]);
+      const ved = opp.filter((o) => o !== c.page);
       expect(ved.sort()).toEqual([...c.targets].sort());
     });
   }
