@@ -5,7 +5,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { diagramHtml, fjernIdentKolonner, navngitteDatafiler, sjekkSti, vurderFil } from "./publiser-felles-wiki.ts";
+import { diagramHtml, fjernIdentKolonner, kjør, navngitteDatafiler, sjekkSti, vurderFil } from "./publiser-felles-wiki.ts";
 import fasit from "./publiser-felles-wiki.datafiler.cases.json";
 
 // Syntetisk fødselsnummer, bygget fra kontrollsifferalgoritmen.
@@ -44,6 +44,53 @@ describe("navngitteDatafiler følger muninns regel (fasiten fra muninn)", () => 
     expect(existsSync(muninn)).toBe(true);
     expect(readFileSync(path.join(import.meta.dir, "publiser-felles-wiki.datafiler.cases.json"), "utf8")).toBe(readFileSync(muninn, "utf8"));
   });
+});
+
+describe("filene publiseringen legger ved siden av en side (removeCases i fasiten fra muninn)", () => {
+  // muninns Felles Fjern sletter disse objektene sammen med siden. Her kjøres
+  // publiseringen selv (tørrkjøring) på en wiki der hver fil siden nevner,
+  // finnes, også i en kodeblokk, så en fil for mye vises. En ref over roten får
+  // en fil over roten og en fil (med HTML-fil) der refen havner om `..` kuttes
+  // ved roten, så en publisering som klemmer refen inn i roten, vises.
+  // Publiseringen laster opp datafilene i siderekkefølge og HTML-filene etter
+  // dem; muninn lister HTML-fila rett etter diagramfila. Derfor sammenlignes
+  // filene uten rekkefølge, men med antall.
+  const rot = mkdtempSync(path.join(tmpdir(), "felles-fjern-"));
+  afterAll(() => rmSync(rot, { recursive: true, force: true }));
+  const innhold = (rel: string) => (rel.endsWith(".html") ? "<!doctype html><p>diagram</p>\n" : rel.endsWith(".csv") ? "a,b\n1,2\n" : "{}\n");
+  for (const [i, c] of fasit.removeCases.entries()) {
+    test(c.name, () => {
+      const wiki = path.join(rot, `w${i}`, "rot");
+      const skriv = (rel: string, tekst: string) => {
+        mkdirSync(path.dirname(path.join(wiki, rel)), { recursive: true });
+        writeFileSync(path.join(wiki, rel), tekst);
+      };
+      skriv(c.page, c.markdown);
+      for (const m of c.markdown.matchAll(/\b(?:src|csv|sql)="([^"]+)"/g)) {
+        const rel = path.posix.normalize(path.posix.join(path.posix.dirname(c.page), m[1]!));
+        const iRoten = rel.startsWith("../")
+          ? [path.posix.resolve("/", path.posix.dirname(c.page), m[1]!).slice(1), path.posix.join(path.posix.dirname(c.page), m[1]!.replace(/^(\.\.\/)+/, ""))]
+          : [rel];
+        if (rel.startsWith("../")) skriv(path.posix.join("..", path.posix.basename(rel)), innhold(rel));
+        for (const r of new Set(iRoten)) {
+          skriv(r, innhold(r));
+          const html = r.replace(/\.(architecture|workflow|lifecycle)\.json$/i, ".html");
+          if (html !== r) skriv(html, innhold(html));
+        }
+      }
+      for (const t of c.targets) skriv(t, innhold(t));
+      const ut: string[] = [];
+      const kode = kjør(["--dry-run", "--bucket", "test-botte-x", wiki, c.page], {
+        env: {}, vars: {}, gcloud: null, spør: () => null, ut: (l) => ut.push(l), feil: (l) => ut.push(l),
+      });
+      expect(ut.filter((l) => l.startsWith("AVVIST"))).toEqual([]);
+      expect(kode).toBe(0);
+      const opp = ut.flatMap((l) => l.match(/^vil laste opp gs:\/\/test-botte-x\/(.+)$/)?.slice(1) ?? []);
+      expect(opp.filter((o) => o === c.page)).toEqual([c.page]);
+      const ved = opp.filter((o) => o !== c.page);
+      expect(ved.sort()).toEqual([...c.targets].sort());
+    });
+  }
 });
 
 describe("navngitteDatafiler finner også det muninn ikke leser", () => {
